@@ -75,17 +75,32 @@ for Link in cc:gcc c++:g++ pkg-config:pkgconf; do
 	done
 done
 
-# The loader searches the directory libc.so.6 lives in, so what the runtime
-# dlopen()s has to be reachable from there. gcc installs libgcc_s.so.1 under
-# /usr/lib64 only, which is not searched.
-for Directory in usr/lib lib lib64 usr/lib64; do
-	[ -e "$RootfsDirectory/$Directory/libc.so.6" ] || continue
-	for Library in libgcc_s.so.1 libstdc++.so.6; do
-		[ -e "$RootfsDirectory/$Directory/$Library" ] && continue
-		Found="$(find "$RootfsDirectory" -maxdepth 4 -name "$Library" -print -quit 2>/dev/null || true)"
-		[ -n "$Found" ] && ln -sfn "${Found#"$RootfsDirectory"}" "$RootfsDirectory/$Directory/$Library"
-	done
-done
+# gcc installs the C++ runtime and libgcc_s under /usr/lib64, and the loader is
+# only compiled with /usr/lib in its default search path, so lunar cannot start
+# until the loader is told about that directory. The account files above and the
+# cache below are what make it work: ldconfig reads ld.so.conf and writes
+# ld.so.cache, which is how every distribution solves this. It runs through the
+# loader rather than chroot, so assembling a tree does not need root.
+echo "== writing the loader configuration"
+cat > "$RootfsDirectory/etc/ld.so.conf" <<'EOF'
+/usr/lib64
+/usr/lib
+EOF
+
+RunLdconfig() {
+	local Tree="$1" Loader="$1/lib64/ld-linux-x86-64.so.2"
+	[ -x "$Tree/sbin/ldconfig" ] || return 1
+	[ -x "$Loader" ] || return 1
+	"$Loader" --library-path "$Tree/usr/lib64:$Tree/usr/lib:$Tree/lib64:$Tree/lib" \
+		"$Tree/sbin/ldconfig" -r "$Tree" || return 1
+	return 0
+}
+
+if RunLdconfig "$RootfsDirectory"; then
+	echo "ok   the loader cache was written"
+else
+	echo "== ldconfig could not be run here; the cache will be built on first boot"
+fi
 
 echo "== writing the account files"
 cat > "$RootfsDirectory/etc/passwd" <<'EOF'
@@ -98,7 +113,6 @@ wheel:x:10:
 nobody:x:65534:
 EOF
 printf 'okra\n' > "$RootfsDirectory/etc/hostname"
-: > "$RootfsDirectory/etc/ld.so.cache"
 
 echo "== checking the rootfs"
 Failures=0

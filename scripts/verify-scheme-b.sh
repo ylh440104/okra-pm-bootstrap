@@ -177,7 +177,31 @@ done
 printf 'root:x:0:0:root:/root:/bin/bash\n' > "$InstallRoot/etc/passwd"
 printf 'root:x:0:\n' > "$InstallRoot/etc/group"
 printf 'okra\n' > "$InstallRoot/etc/hostname"
-: > "$InstallRoot/etc/ld.so.cache"
+
+# The loader cache is what lets lunar start: its C++ runtime lives in /usr/lib64
+# and the loader only looks in /usr/lib by default. It is built here rather than
+# copied from the assembly, because this tree was made by the package manager
+# and the cache has to describe this tree.
+printf '/usr/lib64\n/usr/lib\n' > "$InstallRoot/etc/ld.so.conf"
+if [ -x "$InstallRoot/sbin/ldconfig" ] && [ -x "$InstallRoot/lib64/ld-linux-x86-64.so.2" ]; then
+	"$InstallRoot/lib64/ld-linux-x86-64.so.2" \
+		--library-path "$InstallRoot/usr/lib64:$InstallRoot/usr/lib:$InstallRoot/lib64:$InstallRoot/lib" \
+		"$InstallRoot/sbin/ldconfig" -r "$InstallRoot" && echo "ok   the loader cache was written"
+fi
+
+# The C++ runtime has to be reachable, or the package manager cannot run inside
+# the tree it just installed.
+echo "== the libraries the package manager needs"
+for Library in libstdc++.so.6 libgcc_s.so.1; do
+	Path="$(find "$InstallRoot" -maxdepth 3 -name "$Library" -print -quit 2>/dev/null)"
+	if [ -z "$Path" ]; then
+		echo "FAIL $Library is not in the tree"
+		continue
+	fi
+	Resolved="$(readlink -f "$Path" 2>/dev/null || true)"
+	[ -n "$Resolved" ] && [ -f "$Resolved" ] && echo "ok   $Library -> ${Resolved#"$InstallRoot"}" \
+		|| echo "FAIL $Library does not resolve to a file"
+done
 
 # The system database travels with the system: it is the record of what is
 # installed, and without it the package manager inside the tree would think it
