@@ -78,6 +78,10 @@ jobs:
           git clone -q --depth 1 --branch "${{ github.event.inputs.okrapm_ref }}" \
             https://github.com/OkraLinux/okrapm.git vendor/okrapm
           ls vendor/okrapm/oaatools | head -5
+          # The host lunar does the first install, so it needs the same fix the
+          # in-userland build applies: without it, installing mangles every
+          # package whose libraries are a chain of symlinks.
+          ./scripts/patch-okrapm.sh vendor/okrapm
 
       - name: Fetch the bootstrapped packages
         env:

@@ -213,15 +213,26 @@ done
 # bash is the first thing the chroot runs, and it needs libtinfo. When it
 # cannot find it the failure looks like a broken install, so the search is
 # shown here rather than left to the error message.
+#
+# This also guards the path arithmetic in the installer: libtinfo.so.6 is a
+# symlink to a symlink, and an installer that resolves links while working out
+# where to write them replaces the real library with a link to itself.
 echo "== the libraries bash needs"
 for Library in libtinfo.so.6 libncursesw.so.6 libncursesw.so.6.5; do
-	Found="$(find "$InstallRoot" -maxdepth 3 -name "$Library" -printf '%p -> %l\n' 2>/dev/null | head -3)"
-	if [ -n "$Found" ]; then
-		echo "ok   $Library"
-		printf '%s\n' "$Found" | sed 's/^/       /'
-	else
+	Path="$InstallRoot/usr/lib/$Library"
+	if [ ! -e "$InstallRoot/usr/lib/$Library" ] && [ ! -L "$InstallRoot/usr/lib/$Library" ]; then
 		echo "FAIL $Library is nowhere in the tree"
+		continue
 	fi
+	# readlink -f follows the whole chain, so a self referential link shows up
+	# as a failure here instead of as a missing library much later.
+	Resolved="$(readlink -f "$Path" 2>/dev/null || true)"
+	if [ -z "$Resolved" ] || [ ! -f "$Resolved" ]; then
+		echo "FAIL $Library does not resolve to a file"
+		ls -la "$Path" | sed 's/^/       /'
+		continue
+	fi
+	echo "ok   $Library -> ${Resolved#"$InstallRoot"}"
 done
 
 echo "== what the loader resolves for bash"

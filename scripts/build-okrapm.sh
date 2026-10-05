@@ -43,6 +43,16 @@ git clone -q --depth 1 --branch "$OkrapmRef" "$CloneUrl" "$ScratchDirectory/sour
 }
 echo "== okrapm at $(git -C "$ScratchDirectory/source" rev-parse --short HEAD)"
 
+# OkraPM works out where a payload entry goes with fs::relative, which resolves
+# symlinks, so a package whose libraries are a chain of links is installed with
+# the real file replaced by a link to itself and the other names missing. bash
+# then cannot find libtinfo.so.6. patch-okrapm.sh switches the three call sites
+# to lexically_relative and refuses to continue if a pattern has moved.
+bash "$RepositoryRoot/scripts/patch-okrapm.sh" "$ScratchDirectory/source" || {
+	echo "build-okrapm: could not patch the symlink handling" >&2
+	exit 1
+}
+
 # The file list is the one the package manager installs into a system: the two
 # programs, and the OAA shell tools plus their shared library. Writing it here
 # rather than taking the repository's copy keeps the payload in step with what
