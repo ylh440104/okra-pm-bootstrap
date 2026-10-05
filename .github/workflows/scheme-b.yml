@@ -130,7 +130,10 @@ jobs:
       - name: Prove the package manager manages the system it was built in
         run: |
           set -euo pipefail
-          ./scripts/verify-scheme-b.sh ./repo "$RUNNER_TEMP/host-lunar/lunar"
+          # chroot and mount need root, so the whole check runs under sudo
+          # rather than only the parts that enter the tree. Without it the
+          # install still passes and then the chroot is refused.
+          sudo -E ./scripts/verify-scheme-b.sh ./repo "$RUNNER_TEMP/host-lunar/lunar"
 
 
       - uses: actions/upload-artifact@v4

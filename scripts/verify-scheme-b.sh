@@ -167,7 +167,7 @@ echo "== $InstalledCount records in the system database"
 # exist. They are created here so the chroot can be entered, and the gap is
 # reported rather than hidden.
 echo "== filling in what no package provides yet"
-mkdir -p "$InstallRoot"/{bin,etc,proc,sys,dev,run,tmp,root,var/lib/lunar}
+mkdir -p "$InstallRoot"/{bin,etc,proc,sys,dev,run,tmp,root}
 for Directory in bin sbin; do
 	if [ -d "$InstallRoot/usr/$Directory" ]; then
 		cp -a --remove-destination "$InstallRoot/usr/$Directory/." "$InstallRoot/$Directory"/
@@ -178,6 +178,13 @@ printf 'root:x:0:0:root:/root:/bin/bash\n' > "$InstallRoot/etc/passwd"
 printf 'root:x:0:\n' > "$InstallRoot/etc/group"
 printf 'okra\n' > "$InstallRoot/etc/hostname"
 : > "$InstallRoot/etc/ld.so.cache"
+
+# The system database travels with the system: it is the record of what is
+# installed, and without it the package manager inside the tree would think it
+# is empty and try to install glibc again over the libc it is itself running on.
+echo "== moving the system database into the tree"
+mkdir -p "$InstallRoot/var/lib/lunar"
+cp -a "$StateDirectory/." "$InstallRoot/var/lib/lunar"/
 
 echo "== checking the tree stands on its own"
 Failures=0
@@ -233,37 +240,44 @@ uname -m
 echo "== the compiler inside the userland"
 gcc --version | head -1
 echo "== the package manager inside the userland"
-lunar help | head -3
-echo "== lunar reports the system it is in"
+lunar --root /var/lib/lunar help | head -3
+echo "== what the package manager believes is installed"
+lunar --root /var/lib/lunar list | head -6
+echo "== the system the package manager reports"
 lunar --root /var/lib/lunar status || true
 ' || { echo "verify-scheme-b: the in-userland checks failed" >&2; exit 1; }
 
-echo "== installing a package from inside the userland"
-# This is the real test: the lunar that was compiled and packaged by the
-# bootstrap is asked to add the same repository and install from it. Its state
-# lives in the userland, its compiler built it, and its payload came from the
-# transaction above.
+echo "== managing a package from inside the userland"
+# This is the claim. The lunar running here was compiled by this userland and
+# installed by the transaction above, and it is asked to take a package out of
+# the system and put it back, out of the repository it was installed from. If
+# this works, the userland manages itself.
 chroot "$InstallRoot" /usr/bin/env -i \
 	PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
 	HOME=/root \
 	REPO_URL="$RepoUrl" \
 	/bin/bash -c '
 set -uo pipefail
-lunar --root /var/lib/lunar repo add okra "$REPO_URL" remote
+echo "-- syncing the repository from inside"
 lunar --root /var/lib/lunar sync okra
-lunar --root /var/lib/lunar search make | head -5
-lunar --root /var/lib/lunar plan install GNU.make
-' || { echo "verify-scheme-b: the in-userland install failed" >&2; exit 1; }
-
-echo "== the package manager installed its own dependencies from inside itself"
-chroot "$InstallRoot" /usr/bin/env -i \
-	PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
-	HOME=/root \
-	/bin/bash -c '
-set -uo pipefail
-lunar --root /var/lib/lunar install GNU.make
-lunar --root /var/lib/lunar list
-' || { echo "verify-scheme-b: installing make from inside failed" >&2; exit 1; }
+echo "-- removing GNU.nano"
+test -e /usr/bin/nano || { echo "nano is not installed, the test proves nothing" >&2; exit 1; }
+lunar --root /var/lib/lunar remove GNU.nano
+if [ -e /usr/bin/nano ]; then
+	echo "nano survived its own removal" >&2
+	exit 1
+fi
+echo "nano is gone"
+echo "-- installing it again"
+lunar --root /var/lib/lunar install GNU.nano
+if [ ! -e /usr/bin/nano ]; then
+	echo "nano did not come back" >&2
+	exit 1
+fi
+echo "nano is back"
+echo "-- what the package manager lists now"
+lunar --root /var/lib/lunar list | wc -l
+' || { echo "verify-scheme-b: managing a package from inside failed" >&2; exit 1; }
 
 CleanupMounts
 StopRepoServer
