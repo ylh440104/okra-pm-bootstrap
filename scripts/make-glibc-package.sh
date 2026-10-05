@@ -138,8 +138,12 @@ echo "== the packages own $OwnedCount paths"
 # under one. Without that, the whole gcc runtime would be claimed by glibc and
 # the two packages would fight over it.
 #
-# /usr/src holds the sources the build scripts put there and is not part of the
-# userland, so it is skipped.
+# Only the things that are not package content are skipped: the virtual
+# filesystems, which hold nothing in a sysroot anyway, and /usr/src, where the
+# build scripts put their sources. Everything else is decided by ownership, so
+# nothing glibc installed can be dropped by forgetting to list a directory -
+# /sbin/ldconfig was exactly that mistake, and without it nothing can find the
+# C++ runtime.
 ListSysrootFiles() {
 	python3 - "$Sysroot" "$WorkRoot/owned.txt" > "$WorkRoot/glibc.txt" <<'PY'
 import os, sys
@@ -163,9 +167,14 @@ def is_owned(rel):
     return False
 
 
-skip_tops = {'bin', 'sbin', 'etc', 'proc', 'sys', 'dev', 'run', 'root',
-             'home', 'boot', 'tmp', 'var', 'src'}
+# The virtual filesystems hold nothing in a sysroot, and /etc, /var and /usr/src
+# hold configuration, state and scaffolding rather than package content. The
+# program directories are not skipped: glibc's own ldconfig lives in one of
+# them, and leaving a whole directory out by name is how it went missing before.
+skip_tops = {'proc', 'sys', 'dev', 'run', 'tmp', 'home', 'root', 'boot',
+             'etc', 'var', 'src'}
 out = []
+per_top = {}
 for root, dirs, files in os.walk(sysroot):
     dirs[:] = [d for d in dirs if d != '.git']
     for name in files:
@@ -180,8 +189,14 @@ for root, dirs, files in os.walk(sysroot):
             continue
         if os.path.islink(full) or os.path.isfile(full):
             out.append(rel)
+            per_top[parts[1]] = per_top.get(parts[1], 0) + 1
+
 for entry in sorted(out):
     print(entry)
+# The counts go to standard error so they show up in the log without becoming
+# part of the file list.
+for top in sorted(per_top):
+    print('==   /%s: %d entries' % (top, per_top[top]), file=sys.stderr)
 PY
 }
 

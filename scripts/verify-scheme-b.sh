@@ -183,10 +183,18 @@ printf 'okra\n' > "$InstallRoot/etc/hostname"
 # copied from the assembly, because this tree was made by the package manager
 # and the cache has to describe this tree.
 printf '/usr/lib64\n/usr/lib\n' > "$InstallRoot/etc/ld.so.conf"
-if [ -x "$InstallRoot/sbin/ldconfig" ] && [ -x "$InstallRoot/lib64/ld-linux-x86-64.so.2" ]; then
+Ldconfig=""
+for Candidate in "$InstallRoot/usr/sbin/ldconfig" "$InstallRoot/sbin/ldconfig"; do
+	[ -x "$Candidate" ] && { Ldconfig="$Candidate"; break; }
+done
+if [ -n "$Ldconfig" ] && [ -x "$InstallRoot/lib64/ld-linux-x86-64.so.2" ]; then
 	"$InstallRoot/lib64/ld-linux-x86-64.so.2" \
 		--library-path "$InstallRoot/usr/lib64:$InstallRoot/usr/lib:$InstallRoot/lib64:$InstallRoot/lib" \
-		"$InstallRoot/sbin/ldconfig" -r "$InstallRoot" && echo "ok   the loader cache was written"
+		"$Ldconfig" -r "$InstallRoot" && echo "ok   the loader cache was written"
+else
+	# ldconfig belongs to the glibc package, so its absence means the synthesized
+	# glibc package left it out and nothing will find the C++ runtime.
+	echo "FAIL no ldconfig in the tree, so the loader cache cannot be built"
 fi
 
 # The C++ runtime has to be reachable, or the package manager cannot run inside

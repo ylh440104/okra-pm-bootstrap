@@ -88,12 +88,17 @@ cat > "$RootfsDirectory/etc/ld.so.conf" <<'EOF'
 EOF
 
 RunLdconfig() {
-	local Tree="$1" Loader="$1/lib64/ld-linux-x86-64.so.2"
-	[ -x "$Tree/sbin/ldconfig" ] || return 1
+	local Tree="$1" Loader="$1/lib64/ld-linux-x86-64.so.2" Candidate
 	[ -x "$Loader" ] || return 1
-	"$Loader" --library-path "$Tree/usr/lib64:$Tree/usr/lib:$Tree/lib64:$Tree/lib" \
-		"$Tree/sbin/ldconfig" -r "$Tree" || return 1
-	return 0
+	# glibc installs it as /usr/sbin/ldconfig with /sbin as a link on a merged
+	# system, so both are tried rather than assuming one.
+	for Candidate in "$Tree/usr/sbin/ldconfig" "$Tree/sbin/ldconfig"; do
+		[ -x "$Candidate" ] || continue
+		"$Loader" --library-path "$Tree/usr/lib64:$Tree/usr/lib:$Tree/lib64:$Tree/lib" \
+			"$Candidate" -r "$Tree" || return 1
+		return 0
+	done
+	return 1
 }
 
 if RunLdconfig "$RootfsDirectory"; then
