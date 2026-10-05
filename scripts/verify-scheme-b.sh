@@ -185,7 +185,6 @@ printf 'okra\n' > "$InstallRoot/etc/hostname"
 echo "== moving the system database into the tree"
 mkdir -p "$InstallRoot/var/lib/lunar"
 cp -a "$StateDirectory/." "$InstallRoot/var/lib/lunar"/
-
 echo "== checking the tree stands on its own"
 Failures=0
 for Required in \
@@ -210,6 +209,29 @@ done
 	echo "verify-scheme-b: $Failures required files are missing" >&2
 	exit 1
 }
+
+# bash is the first thing the chroot runs, and it needs libtinfo. When it
+# cannot find it the failure looks like a broken install, so the search is
+# shown here rather than left to the error message.
+echo "== the libraries bash needs"
+for Library in libtinfo.so.6 libncursesw.so.6 libncursesw.so.6.5; do
+	Found="$(find "$InstallRoot" -maxdepth 3 -name "$Library" -printf '%p -> %l\n' 2>/dev/null | head -3)"
+	if [ -n "$Found" ]; then
+		echo "ok   $Library"
+		printf '%s\n' "$Found" | sed 's/^/       /'
+	else
+		echo "FAIL $Library is nowhere in the tree"
+	fi
+done
+
+echo "== what the loader resolves for bash"
+Loader="$InstallRoot/lib64/ld-linux-x86-64.so.2"
+"$Loader" --list "$InstallRoot/usr/bin/bash" 2>&1 | head -20 || true
+
+echo "== the loader's search path"
+"$Loader" --library-path "$InstallRoot/usr/lib:$InstallRoot/lib64:$InstallRoot/lib:$InstallRoot/usr/lib64" \
+	--list "$InstallRoot/usr/bin/bash" 2>&1 | head -20 || true
+
 
 # Every file here came from a transaction, so the only loader that can be
 # present is the Okra one.
