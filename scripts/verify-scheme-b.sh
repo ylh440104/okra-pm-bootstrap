@@ -121,16 +121,31 @@ echo "== ${#References[@]} packages to install"
 echo "== the transaction the resolver plans"
 "$HostLunar" --root "$StateDirectory" plan install "${References[@]}" \
 	> "$WorkRoot/plan.txt" 2>&1 || true
-head -20 "$WorkRoot/plan.txt"
-PlannedGlibc="$(grep -n 'app\.glibc' "$WorkRoot/plan.txt" | head -1 | cut -d: -f1)"
-PlannedGcc="$(grep -n 'GNU\.gcc' "$WorkRoot/plan.txt" | head -1 | cut -d: -f1)"
+head -25 "$WorkRoot/plan.txt"
+
+# The plan echoes the command first, and that line mentions every package, so
+# the position of a package has to come from its own row. A row is an action
+# followed by the object, which is what the leading "+" marks.
+PlanRow() {
+	grep -n "^[[:space:]]*+[[:space:]]\+$1[[:space:]]" "$WorkRoot/plan.txt" |
+		head -1 | cut -d: -f1
+}
+PlannedGlibc="$(PlanRow 'app\.glibc')"
+PlannedGcc="$(PlanRow 'GNU\.gcc')"
 [ -n "$PlannedGlibc" ] && [ -n "$PlannedGcc" ] || {
 	StopRepoServer; echo "verify-scheme-b: the plan is missing glibc or gcc" >&2; exit 1
 }
 [ "$PlannedGlibc" -lt "$PlannedGcc" ] || {
 	StopRepoServer; echo "verify-scheme-b: glibc was not ordered before gcc" >&2; exit 1
 }
-echo "== glibc is planned before gcc"
+echo "== the resolver put glibc at row $PlannedGlibc and gcc at row $PlannedGcc"
+
+# The package manager must be in the plan as well: it is a package like any
+# other, not something installed on the side.
+PlanRow 'Okra\.okrapm' >/dev/null || {
+	StopRepoServer; echo "verify-scheme-b: the plan has no package manager" >&2; exit 1
+}
+echo "== the package manager is one of the packages being installed"
 
 echo "== installing the whole userland into an empty directory"
 export LUNAR_INSTALL_ROOT="$InstallRoot"

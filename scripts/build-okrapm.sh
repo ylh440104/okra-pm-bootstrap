@@ -227,6 +227,34 @@ trap - EXIT
 
 Archive="$RootfsDirectory/out/Okra.okrapm.oaa"
 [ -f "$Archive" ] || { echo "build-okrapm: no archive was produced" >&2; exit 1; }
+
+# The packer writes the files and the size but not the dependencies, and the
+# package manager cannot run without a libc. Adding it here keeps the archive
+# honest about what it needs, and it is what puts glibc ahead of it in the
+# transaction the resolver plans.
+Repack="$ScratchDirectory/repack"
+rm -rf "$Repack"
+mkdir -p "$Repack"
+if ! tar -xf "$Archive" -C "$Repack" 2>/dev/null &&
+	! tar --zstd -xf "$Archive" -C "$Repack" 2>/dev/null; then
+	echo "build-okrapm: cannot unpack the archive it just built" >&2
+	exit 1
+fi
+if [ ! -f "$Repack/meta.yaml" ]; then
+	echo "build-okrapm: the archive has no meta.yaml" >&2
+	exit 1
+fi
+if ! grep -q '^dependencies:' "$Repack/meta.yaml"; then
+	printf 'dependencies:\n  - app.glibc\n' >> "$Repack/meta.yaml"
+	echo "== declared the libc dependency"
+fi
+"$ScratchDirectory/source/oaatools/oaa-build" "$Repack" -o "$Archive" || {
+	echo "build-okrapm: repacking failed" >&2
+	exit 1
+}
+echo "== the package manager declares"
+cat "$Repack/meta.yaml"
+
 cp -f "$Archive" "$OutputDirectory/"
 sha256sum "$OutputDirectory/Okra.okrapm.oaa" | awk '{print $1"  Okra.okrapm.oaa"}' \
 	> "$OutputDirectory/Okra.okrapm.oaa.sha256"
