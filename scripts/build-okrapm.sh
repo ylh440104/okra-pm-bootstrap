@@ -27,6 +27,10 @@ OkrapmRef="${OKRA_OKRAPM_REF:-main}"
 Token="${GH_TOKEN:-${GITHUB_TOKEN:-}}"
 ScratchDirectory="${RUNNER_TEMP:-${TMPDIR:-/tmp}}/okra-okrapm"
 
+# patch-okrapm.sh lives next to this script, in the repository being built.
+ScriptDirectory="$(cd "$(dirname "$0")" && pwd)"
+RepositoryRoot="${OKRA_REPO_ROOT:-$(cd "$ScriptDirectory/.." && pwd)}"
+
 [ -d "$RootfsDirectory" ] || { echo "build-okrapm: no rootfs at $RootfsDirectory" >&2; exit 1; }
 mkdir -p "$OutputDirectory" "$ScratchDirectory"
 
