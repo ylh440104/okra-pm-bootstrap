@@ -35,6 +35,9 @@ Token="${GH_TOKEN:-${GITHUB_TOKEN:-}}"
 
 [ -n "$Token" ] || { echo "publish-repo: GH_TOKEN must be set" >&2; exit 1; }
 
+# ExtractMetaField, for reading each archive's identity.
+. "$ScriptDirectory/lib-oaa.sh"
+
 rm -rf "$OutputDirectory"
 mkdir -p "$OutputDirectory/artifacts"
 
@@ -71,72 +74,37 @@ AddOkrapm() {
 
 # RenameToLunarNames() - give every human named archive its resolver name.
 # Return: 0. Archives whose meta.yaml cannot be read are reported and skipped.
+#
+# The namespace and version come out of the meta.yaml rather than the file name,
+# because the two do not always agree.
 RenameToLunarNames() {
-	python3 - "$OutputDirectory/artifacts" <<'PY'
-import os, sys, tarfile
-
-artifacts = sys.argv[1]
-renamed = 0
-skipped = []
-
-def read_meta(path):
-    try:
-        with tarfile.open(path, 'r:*') as handle:
-            member = None
-            for candidate in handle.getmembers():
-                if candidate.name.rstrip('/').endswith('meta.yaml') and candidate.isfile():
-                    if member is None or candidate.name.count('/') < member.name.count('/'):
-                        member = candidate
-            if member is None:
-                return {}
-            text = handle.extractfile(member).read().decode('utf-8', 'replace')
-    except Exception:
-        return {}
-    fields = {}
-    in_list = False
-    for line in text.splitlines():
-        if line.startswith('files:') or line.startswith('dependencies:'):
-            in_list = True
-            continue
-        if in_list:
-            if line.startswith('  - ') or not line.strip():
-                continue
-            in_list = False
-        if line.startswith('  ') or ':' not in line:
-            continue
-        key, _, value = line.partition(':')
-        value = value.strip().strip('"')
-        if key.strip() in ('name', 'namespace', 'version'):
-            fields[key.strip()] = value
-    return fields
-
-for name in sorted(os.listdir(artifacts)):
-    if not name.endswith('.oaa'):
-        continue
-    path = os.path.join(artifacts, name)
-    meta = read_meta(path)
-    namespace = meta.get('namespace', '')
-    package = meta.get('name', '')
-    version = meta.get('version', '')
-    if not (namespace and package and version):
-        skipped.append(name)
-        continue
-    wanted = '%s.%s@%s.oaa' % (namespace, package, version)
-    if name == wanted:
-        continue
-    target = os.path.join(artifacts, wanted)
-    if os.path.exists(target):
-        skipped.append(name)
-        continue
-    os.rename(path, target)
-    renamed += 1
-
-print('== renamed %d archives to their Lunar names' % renamed)
-if skipped:
-    print('== these archives could not be renamed:', file=sys.stderr)
-    for name in skipped:
-        print('   %s' % name, file=sys.stderr)
-PY
+	local Archive Namespace Name Version Wanted
+	local Renamed=0 Skipped=0
+	for Archive in "$OutputDirectory/artifacts"/*.oaa; do
+		[ -f "$Archive" ] || continue
+		Namespace="$(ExtractMetaField "$Archive" namespace || true)"
+		Name="$(ExtractMetaField "$Archive" name || true)"
+		Version="$(ExtractMetaField "$Archive" version || true)"
+		if [ -z "$Namespace" ] || [ -z "$Name" ] || [ -z "$Version" ]; then
+			echo "== cannot read the identity of $(basename "$Archive")" >&2
+			Skipped=$((Skipped + 1))
+			continue
+		fi
+		Wanted="$OutputDirectory/artifacts/$Namespace.$Name@$Version.oaa"
+		if [ "$Archive" = "$Wanted" ]; then
+			continue
+		fi
+		if [ -e "$Wanted" ]; then
+			echo "== $Namespace.$Name@$Version.oaa already exists" >&2
+			Skipped=$((Skipped + 1))
+			continue
+		fi
+		mv -f "$Archive" "$Wanted"
+		Renamed=$((Renamed + 1))
+	done
+	echo "== renamed $Renamed archives to their Lunar names"
+	[ "$Skipped" -eq 0 ] || echo "== $Skipped archives could not be renamed" >&2
+	return 0
 }
 
 echo "== collecting the bootstrapped packages"

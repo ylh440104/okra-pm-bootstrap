@@ -15,7 +15,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import tarfile
+import subprocess
 import threading
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -23,25 +23,34 @@ from typing import Iterable, Optional
 
 INDEX_LOCK = threading.Lock()
 
+# Python's tarfile cannot read zstd before 3.14 and the runners are on 3.12, so
+# the archives are read through the tar command. It also accepts the plain and
+# gzip forms the packer may fall back to.
+META_MEMBERS = ("./meta.yaml", "meta.yaml")
+TAR_ATTEMPTS = (
+    ["tar"],
+    ["tar", "--zstd"],
+    ["tar", "-z"],
+    ["tar", "-J"],
+    ["tar", "--lzma"],
+)
+
 
 def extract_meta(archive: Path) -> Optional[str]:
     """Read the meta.yaml out of an OAA archive, wherever it sits."""
-    try:
-        with tarfile.open(archive, "r:*") as handle:
-            member = None
-            for candidate in handle.getmembers():
-                if candidate.name.rstrip("/").endswith("meta.yaml") and candidate.isfile():
-                    # Prefer the shallowest one, so a nested copy cannot win.
-                    if member is None or candidate.name.count("/") < member.name.count("/"):
-                        member = candidate
-            if member is None:
-                return None
-            data = handle.extractfile(member)
-            if data is None:
-                return None
-            return data.read().decode("utf-8", errors="replace")
-    except Exception:
-        return None
+    for member in META_MEMBERS:
+        for prefix in TAR_ATTEMPTS:
+            try:
+                result = subprocess.run(
+                    prefix + ["-xOf", str(archive), member],
+                    capture_output=True,
+                    timeout=120,
+                )
+            except Exception:
+                continue
+            if result.returncode == 0 and result.stdout:
+                return result.stdout.decode("utf-8", errors="replace")
+    return None
 
 
 def iter_artifacts(repo_root: Path) -> Iterable[Path]:

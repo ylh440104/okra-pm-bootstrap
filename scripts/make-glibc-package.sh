@@ -34,6 +34,9 @@ Token="${GH_TOKEN:-${GITHUB_TOKEN:-}}"
 [ -d "$Sysroot" ] || { echo "make-glibc-package: no sysroot at $Sysroot" >&2; exit 1; }
 [ -n "$Token" ] || { echo "make-glibc-package: GH_TOKEN must be set" >&2; exit 1; }
 
+# ExtractMeta, for reading the packages' file lists.
+. "$ScriptDirectory/lib-oaa.sh"
+
 rm -rf "$WorkRoot"
 # The packages are only read, never written, so a caller that already has them
 # can hand over its directory and save a few hundred megabytes of downloads.
@@ -96,34 +99,30 @@ echo "== $(ls "$PackageCache" | wc -l) packages"
 
 # CollectOwnership() - list the files the published packages claim.
 # Return: 0. Writes one path per line to $WorkRoot/owned.txt.
+#
+# The meta.yaml is read with the tar command rather than Python's tarfile,
+# which cannot read the zstd the archives use on the runner's Python.
 CollectOwnership() {
-	python3 - "$PackageCache" > "$WorkRoot/owned.txt" <<'PY'
-import glob, os, sys, tarfile
-
-owned = set()
-for path in sorted(glob.glob(os.path.join(sys.argv[1], '*.oaa'))):
-    try:
-        archive = tarfile.open(path, 'r:*')
-    except Exception:
-        continue
-    names = archive.getnames()
-    member = next((n for n in names if n.rstrip('/').endswith('meta.yaml')), None)
-    if member is None:
-        continue
-    meta = archive.extractfile(member).read().decode('utf-8', 'replace')
-    in_list = False
-    for line in meta.splitlines():
-        if line.startswith('files:'):
-            in_list = True
-            continue
-        if in_list:
-            if line.startswith('  - '):
-                owned.add(line[5:].strip())
-            elif line and not line.startswith(' '):
-                in_list = False
-for entry in sorted(owned):
-    print(entry)
-PY
+	: > "$WorkRoot/owned.txt"
+	local Archive
+	for Archive in "$PackageCache"/*.oaa; do
+		[ -f "$Archive" ] || continue
+		ExtractMeta "$Archive" > "$WorkRoot/meta.txt" || {
+			echo "make-glibc-package: no meta.yaml in $(basename "$Archive")" >&2
+			continue
+		}
+		# The list ends at the next top level key, not at the first blank line,
+		# so the section is tracked explicitly.
+		awk '
+			/^[A-Za-z_]+:/ { section = ($0 ~ /^files:/) ? "files" : ""; next }
+			section == "files" && /^[[:space:]]+-/ {
+				line = $0
+				sub(/^[[:space:]]+-[[:space:]]*/, "", line)
+				print line
+			}
+		' "$WorkRoot/meta.txt" >> "$WorkRoot/owned.txt"
+	done
+	sort -u "$WorkRoot/owned.txt" -o "$WorkRoot/owned.txt"
 }
 
 CollectOwnership

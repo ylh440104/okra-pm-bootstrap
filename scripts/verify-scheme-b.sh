@@ -78,7 +78,12 @@ echo "== serving the repository"
 StartRepoServer || exit 1
 RepoUrl="http://127.0.0.1:$RepoPort"
 echo "== repository at $RepoUrl"
-IndexedCount="$(curl -fsS "$RepoUrl/index.yaml" | grep -c '^name:' || true)"
+# index.yaml is written by the server when it is asked for it, so it is fetched
+# over HTTP rather than read from the directory.
+curl -fsS "$RepoUrl/index.yaml" -o "$WorkRoot/index.yaml" || {
+	StopRepoServer; echo "verify-scheme-b: no index at the repository" >&2; exit 1
+}
+IndexedCount="$(grep -c '^name:' "$WorkRoot/index.yaml" || true)"
 echo "== the index lists $IndexedCount packages"
 [ "$IndexedCount" -gt 50 ] || { StopRepoServer; echo "verify-scheme-b: the index is too small" >&2; exit 1; }
 
@@ -97,10 +102,10 @@ echo "== adding the repository and syncing"
 
 # Every package in the index is installed, so the tree is complete and the
 # ordering is the resolver's job rather than a list written here by hand.
-mapfile -t References < <(curl -fsS "$RepoUrl/index.yaml" | python3 -c '
+mapfile -t References < <(python3 -c '
 import sys
 ns = name = None
-for line in sys.stdin:
+for line in open(sys.argv[1]):
     line = line.rstrip()
     if line.startswith("name:"):
         name = line.split(":", 1)[1].strip()
@@ -109,7 +114,7 @@ for line in sys.stdin:
         if ns and name:
             print("%s.%s" % (ns, name))
             ns = name = None
-')
+' "$WorkRoot/index.yaml")
 echo "== ${#References[@]} packages to install"
 [ "${#References[@]}" -gt 50 ] || { StopRepoServer; echo "verify-scheme-b: too few packages" >&2; exit 1; }
 

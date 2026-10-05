@@ -65,29 +65,9 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          # Cached between runs: unpacking it takes a minute, building it takes
-          # half an hour and it never changes.
-          if [ ! -x "$OKRA_TOOLCHAIN/cross/bin/$OKRA_TARGET_TRIPLE-gcc" ]; then
-            mkdir -p /opt/okra-toolchain-cache
-            Key="okra-toolchain-$OKRA_TARGET_TRIPLE"
-            if [ -f "/opt/okra-toolchain-cache/$Key.tar.zst" ]; then
-              sudo mkdir -p /opt
-              sudo tar --zstd -xf "/opt/okra-toolchain-cache/$Key.tar.zst" -C /opt
-              sudo chown -R "$(id -u):$(id -g)" "$OKRA_TOOLCHAIN"
-            fi
-          fi
+          # Downloading the published artifact takes a minute or two. Building
+          # the toolchain takes half an hour, so it is never rebuilt here.
           ./scripts/fetch-toolchain.sh
-
-      - name: Cache the toolchain for the next run
-        if: always()
-        run: |
-          set -euo pipefail
-          if [ -x "$OKRA_TOOLCHAIN/cross/bin/$OKRA_TARGET_TRIPLE-gcc" ]; then
-            mkdir -p /opt/okra-toolchain-cache
-            sudo tar --zstd -cf "/opt/okra-toolchain-cache/okra-toolchain-$OKRA_TARGET_TRIPLE.tar.zst" \
-              -C /opt "$(basename "$OKRA_TOOLCHAIN")"
-            ls -la /opt/okra-toolchain-cache
-          fi
 
       - name: Fetch the bootstrapped packages
         env:
