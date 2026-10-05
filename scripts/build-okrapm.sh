@@ -185,6 +185,15 @@ OPSIS_ALLOW_NONROOT=1 \
 [ -f "$Out/Okra.okrapm.oaa" ] || { echo "the packer produced no archive" >&2; exit 1; }
 echo "== the package manager packaged itself"
 ls -la "$Out"
+
+# The archive becomes a repository entry, so what it declares is what the
+# resolver will see. Printing it here saves a round trip when something is off.
+echo "== what the archive declares"
+tar -xOf "$Out/Okra.okrapm.oaa" ./meta.yaml 2>/dev/null || \
+	tar --zstd -xOf "$Out/Okra.okrapm.oaa" ./meta.yaml 2>/dev/null || true
+echo "== what the archive carries"
+tar -tf "$Out/Okra.okrapm.oaa" 2>/dev/null | head -15 || \
+	tar --zstd -tf "$Out/Okra.okrapm.oaa" 2>/dev/null | head -15 || true
 INNER
 chmod +x "$RootfsDirectory/usr/src/build-okrapm.sh"
 

@@ -69,6 +69,16 @@ jobs:
           # the toolchain takes half an hour, so it is never rebuilt here.
           ./scripts/fetch-toolchain.sh
 
+      - name: Fetch the oaa toolkit
+        run: |
+          set -euo pipefail
+          # make-glibc-package.sh packs the synthesized glibc package with
+          # oaa-build from the okrapm project, and the verification below builds
+          # lunar from the same checkout.
+          git clone -q --depth 1 --branch "${{ github.event.inputs.okrapm_ref }}" \
+            https://github.com/OkraLinux/okrapm.git vendor/okrapm
+          ls vendor/okrapm/oaatools | head -5
+
       - name: Fetch the bootstrapped packages
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -107,9 +117,10 @@ jobs:
       - name: Build the host lunar for the verification
         run: |
           set -euo pipefail
-          git clone -q --depth 1 --branch "${{ github.event.inputs.okrapm_ref }}" \
-            https://github.com/OkraLinux/okrapm.git "$RUNNER_TEMP/okrapm-source"
-          cmake -S "$RUNNER_TEMP/okrapm-source" -B "$RUNNER_TEMP/okrapm-build" \
+          # The same checkout the oaa toolkit came from: this lunar runs on the
+          # host and does the first install, before there is a lunar inside the
+          # userland to do it.
+          cmake -S vendor/okrapm -B "$RUNNER_TEMP/okrapm-build" \
             -DCMAKE_BUILD_TYPE=Release >/dev/null
           cmake --build "$RUNNER_TEMP/okrapm-build" -j4 --target lunar >/dev/null
           mkdir -p "$RUNNER_TEMP/host-lunar"
