@@ -1,0 +1,169 @@
+name: Scheme B - the package manager drives the bootstrap
+
+# Scheme B: the Okra package manager is in charge of the whole system.
+#
+# What this workflow proves, in order:
+#
+#   1. the cross toolchain builds a userland out of the 70 bootstrapped packages
+#   2. OkraPM (lunar, opsis, the oaa tools) is compiled by that userland's own
+#      g++, and packed by its own opsis
+#   3. the result becomes a Lunar software source - a repository, in the format
+#      lunar syncs, including the app.glibc package that was missing
+#   4. lunar, running on the host, installs that entire userland into an empty
+#      directory, in dependency order, as one transaction
+#   5. the package manager that the transaction installed then runs inside the
+#      chroot and installs packages from the same repository, using only what
+#      the transaction put there
+#
+# Step 5 is what makes it scheme B rather than scheme A. The package manager is
+# not compiled after the fact into a finished system: it is a package in the
+# repository, it is built by the system it belongs to, and it manages that
+# system from the inside.
+#
+# The seed is still Ubuntu's own gcc, which built the cross toolchain once.
+# Everything after that comes from the cross toolchain.
+on:
+  workflow_dispatch:
+    inputs:
+      okrapm_ref:
+        description: 'okrapm revision to build (branch, tag or commit)'
+        required: false
+        default: 'main'
+      publish:
+        description: 'Publish the repository and the package manager as a release'
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+  actions: read
+
+env:
+  OKRA_TOOLCHAIN: /opt/okra-toolchain
+  OKRA_TARGET_TRIPLE: x86_64-okra-linux-gnu
+  OKRA_TOOLCHAIN_SOURCE_REPOSITORY: ylh440104/okra-oaa-packages-x86_64
+
+jobs:
+  scheme-b:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install what the build needs
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            bc bison flex libssl-dev libelf-dev cmake \
+            tar xz-utils zstd gzip bzip2 lzip file rsync python3 wget \
+            curl ca-certificates git unzip
+
+      - name: Fetch the cross toolchain
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          # Cached between runs: unpacking it takes a minute, building it takes
+          # half an hour and it never changes.
+          if [ ! -x "$OKRA_TOOLCHAIN/cross/bin/$OKRA_TARGET_TRIPLE-gcc" ]; then
+            mkdir -p /opt/okra-toolchain-cache
+            Key="okra-toolchain-$OKRA_TARGET_TRIPLE"
+            if [ -f "/opt/okra-toolchain-cache/$Key.tar.zst" ]; then
+              sudo mkdir -p /opt
+              sudo tar --zstd -xf "/opt/okra-toolchain-cache/$Key.tar.zst" -C /opt
+              sudo chown -R "$(id -u):$(id -g)" "$OKRA_TOOLCHAIN"
+            fi
+          fi
+          ./scripts/fetch-toolchain.sh
+
+      - name: Cache the toolchain for the next run
+        if: always()
+        run: |
+          set -euo pipefail
+          if [ -x "$OKRA_TOOLCHAIN/cross/bin/$OKRA_TARGET_TRIPLE-gcc" ]; then
+            mkdir -p /opt/okra-toolchain-cache
+            sudo tar --zstd -cf "/opt/okra-toolchain-cache/okra-toolchain-$OKRA_TARGET_TRIPLE.tar.zst" \
+              -C /opt "$(basename "$OKRA_TOOLCHAIN")"
+            ls -la /opt/okra-toolchain-cache
+          fi
+
+      - name: Fetch the bootstrapped packages
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/okra-packages"
+          ./scripts/fetch-packages.sh "$RUNNER_TEMP/okra-packages"
+
+      - name: Assemble the userland
+        run: |
+          set -euo pipefail
+          sudo mkdir -p "$RUNNER_TEMP/okra-rootfs"
+          sudo chown "$(id -u):$(id -g)" "$RUNNER_TEMP/okra-rootfs"
+          ./scripts/assemble-userland.sh \
+            "$RUNNER_TEMP/okra-rootfs" \
+            "$RUNNER_TEMP/okra-packages"
+
+      - name: Compile the package manager inside the userland
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          OKRA_OKRAPM_REF: ${{ github.event.inputs.okrapm_ref }}
+        run: |
+          set -euo pipefail
+          sudo -E ./scripts/build-okrapm.sh \
+            "$RUNNER_TEMP/okra-rootfs" \
+            "$RUNNER_TEMP/okra-okrapm"
+          sudo chown -R "$(id -u):$(id -g)" "$RUNNER_TEMP/okra-okrapm"
+
+      - name: Build the software source
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          OKRA_ARTIFACTS: ${{ runner.temp }}/okra-okrapm/Okra.okrapm.oaa
+        run: |
+          set -euo pipefail
+          ./scripts/publish-repo.sh
+      - name: Build the host lunar for the verification
+        run: |
+          set -euo pipefail
+          git clone -q --depth 1 --branch "${{ github.event.inputs.okrapm_ref }}" \
+            https://github.com/OkraLinux/okrapm.git "$RUNNER_TEMP/okrapm-source"
+          cmake -S "$RUNNER_TEMP/okrapm-source" -B "$RUNNER_TEMP/okrapm-build" \
+            -DCMAKE_BUILD_TYPE=Release >/dev/null
+          cmake --build "$RUNNER_TEMP/okrapm-build" -j4 --target lunar >/dev/null
+          mkdir -p "$RUNNER_TEMP/host-lunar"
+          cp "$RUNNER_TEMP/okrapm-build/src/lunar/lunar" "$RUNNER_TEMP/host-lunar/lunar"
+          "$RUNNER_TEMP/host-lunar/lunar" help | head -3
+
+      - name: Prove the package manager manages the system it was built in
+        run: |
+          set -euo pipefail
+          ./scripts/verify-scheme-b.sh ./repo "$RUNNER_TEMP/host-lunar/lunar"
+
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: okra-scheme-b-repository
+          path: |
+            repo/index.yaml
+            repo/artifacts/Okra.okrapm.oaa
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Publish the repository and the package manager
+        if: ${{ github.event.inputs.publish == 'true' }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          Tag="okra-repo"
+          gh release view "$Tag" >/dev/null 2>&1 || gh release create "$Tag" \
+            --title "Okra software source" \
+            --notes "The OkraPM software source produced by scheme B: the bootstrapped x86_64 packages in the layout lunar syncs, plus the package manager compiled by the userland itself."
+          gh release upload "$Tag" \
+            "repo/index.yaml" \
+            "repo/artifacts/Okra.okrapm.oaa" \
+            "repo/artifacts/Okra.okrapm.oaa.sha256" \
+            --clobber
+          gh release view "$Tag" --json assets --jq '.assets | length'
