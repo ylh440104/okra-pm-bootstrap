@@ -347,11 +347,24 @@ echo "-- installing Okra.hello"
 lunar --root /var/lib/lunar download Okra.hello || true
 echo "-- what the package manager fetched"
 ls -la /var/lib/lunar/repos/okra/artifacts/ 2>/dev/null | head -6
-for Fetched in /var/lib/lunar/repos/okra/artifacts/Okra.hello*; do
-	[ -f "$Fetched" ] || continue
-	echo "-- reading $Fetched"
-	tar -tf "$Fetched" 2>&1 | head -4
-	tar --zstd -tf "$Fetched" 2>&1 | head -4
+# The installer extracts into a temporary directory and copies from there, so
+# the same two steps are done by hand here: if the archive is readable and the
+# copy works, the failure is inside the installer rather than in the archive.
+echo "-- probing the archive the way the installer does"
+Probe=/tmp/lunar-probe
+rm -rf "$Probe"
+mkdir -p "$Probe"
+for Candidate in /var/lib/lunar/repos/okra/artifacts/Okra.hello* \
+	/var/lib/lunar/cache/downloads/Okra.hello*; do
+	[ -f "$Candidate" ] || continue
+	echo "   $Candidate is $(stat -c %s "$Candidate") bytes"
+	rm -rf "$Probe"
+	mkdir -p "$Probe"
+	if tar --zstd -xf "$Candidate" -C "$Probe"; then
+		echo "   extracted: $(ls "$Probe" | tr '\n' ' ')"
+	else
+		echo "   tar could not read it"
+	fi
 done
 lunar --root /var/lib/lunar install Okra.hello
 if [ ! -e /usr/bin/hello ]; then
