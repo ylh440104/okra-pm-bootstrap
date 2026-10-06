@@ -53,14 +53,41 @@ echo "== $Count packages available"
 Downloaded=0
 while read -r Name; do
 	[ -n "$Name" ] || continue
-	if [ -s "$Destination/$Name" ]; then
+	Target="$Destination/$Name"
+
+	# Every archive has a sidecar checksum in the release, and without checking
+	# it a truncated download is only discovered much later as a mysterious
+	# unpack failure. The loop retries a few times because the failure is
+	# usually transient.
+	if [ -s "$Target" ]; then
 		Downloaded=$((Downloaded + 1))
 		continue
 	fi
-	curl -sSL -m 600 -H "Authorization: token $Token" \
-		-o "$Destination/$Name" \
-		"https://github.com/$SourceRepository/releases/download/$SourceRelease/$Name" || {
-		echo "fetch-packages: could not download $Name" >&2
+
+	Attempt=1
+	while [ "$Attempt" -le 3 ]; do
+		if curl -fsSL -m 600 -H "Authorization: token $Token" \
+			-o "$Target" \
+			"https://github.com/$SourceRepository/releases/download/$SourceRelease/$Name" &&
+			curl -fsSL -m 60 -H "Authorization: token $Token" \
+				-o "$Target.sha256" \
+				"https://github.com/$SourceRepository/releases/download/$SourceRelease/$Name.sha256"; then
+			Expected="$(awk 'NR == 1 {print $1}' "$Target.sha256" 2>/dev/null || true)"
+			Actual="$(sha256sum "$Target" | awk '{print $1}')"
+			if [ -n "$Expected" ] && [ "$Expected" = "$Actual" ]; then
+				break
+			fi
+			echo "== $Name failed its checksum on attempt $Attempt, fetching again" >&2
+		else
+			echo "== $Name could not be fetched on attempt $Attempt" >&2
+		fi
+		rm -f "$Target" "$Target.sha256"
+		Attempt=$((Attempt + 1))
+		sleep 5
+	done
+
+	[ -s "$Target" ] || {
+		echo "fetch-packages: $Name never arrived intact" >&2
 		exit 1
 	}
 	Downloaded=$((Downloaded + 1))
