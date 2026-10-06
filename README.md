@@ -42,6 +42,7 @@ scripts/fetch-packages.sh        取 70 个自举包
 scripts/assemble-userland.sh     工具链 sysroot + 包 → rootfs
 scripts/build-okrapm.sh          在 Okra 用户态里编译 OkraPM
 scripts/make-glibc-package.sh    sysroot 合成 app.glibc 包
+scripts/make-sample-package.sh   编一个用户态里还没有的包，供 chroot 内安装测试
 scripts/publish-repo.sh          打包成 Lunar 软件源
 scripts/repo-server.py           提供软件源，生成 index.yaml
 scripts/verify-scheme-b.sh       用 lunar 装整个系统并验证

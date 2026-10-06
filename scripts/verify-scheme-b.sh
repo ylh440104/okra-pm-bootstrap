@@ -102,6 +102,10 @@ echo "== adding the repository and syncing"
 
 # Every package in the index is installed, so the tree is complete and the
 # ordering is the resolver's job rather than a list written here by hand.
+#
+# Okra.hello is left out on purpose. It is in the repository so the chroot can
+# install it from there, and installing it here as well would leave nothing to
+# test from inside.
 mapfile -t References < <(python3 -c '
 import sys
 ns = name = None
@@ -112,7 +116,8 @@ for line in open(sys.argv[1]):
     elif line.startswith("namespace:"):
         ns = line.split(":", 1)[1].strip()
         if ns and name:
-            print("%s.%s" % (ns, name))
+            if "%s.%s" % (ns, name) != "Okra.hello":
+                print("%s.%s" % (ns, name))
             ns = name = None
 ' "$WorkRoot/index.yaml")
 echo "== ${#References[@]} packages to install"
