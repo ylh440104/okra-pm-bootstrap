@@ -341,6 +341,18 @@ if [ -e /usr/bin/hello ]; then
 	exit 1
 fi
 echo "-- installing Okra.hello"
+# The artifact is fetched before the install so the run shows whether it
+# arrived and whether tar can read it, rather than only that the transaction
+# failed.
+lunar --root /var/lib/lunar download Okra.hello || true
+echo "-- what the package manager fetched"
+ls -la /var/lib/lunar/repos/okra/artifacts/ 2>/dev/null | head -6
+for Fetched in /var/lib/lunar/repos/okra/artifacts/Okra.hello*; do
+	[ -f "$Fetched" ] || continue
+	echo "-- reading $Fetched"
+	tar -tf "$Fetched" 2>&1 | head -4
+	tar --zstd -tf "$Fetched" 2>&1 | head -4
+done
 lunar --root /var/lib/lunar install Okra.hello
 if [ ! -e /usr/bin/hello ]; then
 	echo "hello did not appear" >&2
