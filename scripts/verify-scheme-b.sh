@@ -360,8 +360,8 @@ echo "-- zstd has to work, because tar calls it for every archive"
 zstd --version || exit 1
 echo "-- and tar has to be able to read a package with it"
 # The archive is fetched rather than assumed: sync brings the index, and where
-# the artifacts land is the package manager's business, so it is asked for one
-# and then found on disk.
+# the artifacts land is up to the package manager, so it is asked for one and
+# then found on disk.
 lunar --root /var/lib/lunar download Okra.hello >/dev/null || exit 1
 Archive="$(find /var/lib/lunar -name "Okra.hello@*.oaa" -print -quit 2>/dev/null)"
 [ -n "$Archive" ] || { echo "the downloaded archive is not on disk" >&2; exit 1; }
