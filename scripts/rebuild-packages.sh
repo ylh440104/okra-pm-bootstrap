@@ -21,7 +21,7 @@
 #     (meson, ninja, libgmp-dev). Those cannot be built here, so they are left
 #     out and named, rather than failing halfway through the run.
 #
-# Usage: rebuild-packages.sh <rootfs-dir> <recipes-dir> <output-dir> [package...]
+# Usage: rebuild-packages.sh <rootfs-dir> <recipes-dir> <repository-dir> <output-dir> [package...]
 # Environment:
 #   OKRA_JOBS      default 4
 #   OKRA_OAATOOLS  where oaa-build lives inside the userland
@@ -29,10 +29,11 @@
 # Return: 0 when every package that was attempted produced an archive.
 set -uo pipefail
 
-RootfsDirectory="${1:?usage: rebuild-packages.sh <rootfs-dir> <recipes-dir> <output-dir> [package...]}"
-RecipesDirectory="${2:?usage: rebuild-packages.sh <rootfs-dir> <recipes-dir> <output-dir> [package...]}"
-OutputDirectory="${3:?usage: rebuild-packages.sh <rootfs-dir> <recipes-dir> <output-dir> [package...]}"
-shift 3
+RootfsDirectory="${1:?usage: rebuild-packages.sh <rootfs-dir> <recipes-dir> <repository-dir> <output-dir> [package...]}"
+RecipesDirectory="${2:?usage: rebuild-packages.sh <rootfs-dir> <recipes-dir> <repository-dir> <output-dir> [package...]}"
+RepositoryDirectory="${3:?usage: rebuild-packages.sh <rootfs-dir> <recipes-dir> <repository-dir> <output-dir> [package...]}"
+OutputDirectory="${4:?usage: rebuild-packages.sh <rootfs-dir> <recipes-dir> <repository-dir> <output-dir> [package...]}"
+shift 4
 Wanted=("$@")
 
 Jobs="${OKRA_JOBS:-4}"
@@ -107,14 +108,38 @@ echo "== $Fetched sources ready, $Unfetched missing"
 [ "$Unfetched" -eq 0 ] || { echo "rebuild-packages: some sources are missing" >&2; exit 1; }
 du -sh "$WorkHost/src" | sed 's/^/   /'
 
-# The packer comes out of the package manager, which is already built but not
-# yet installed in this tree: the install happens in the verification step, from
-# the repository, and the repository is built after this. So the tools are taken
-# out of the archive directly.
+# Two things have to be in the tree before anything can be packed, and neither
+# arrives through the package manager at this point in the run.
 #
-# This is a seed action and it is named as one. It is also the only file that
-# enters the tree outside a transaction, which is why it is limited to the
-# packer and its helpers and nothing else.
+# The packer itself comes out of the package manager archive: the manager is
+# built but not yet installed here, because the install happens in the
+# verification step from the repository, and the repository is built before
+# this.
+#
+# The libraries come out of the repository, because the tree this step runs on
+# was assembled from the seventy cross built packages and those do not include
+# them. zstd is one of the seventy and it links against liblz4.so.1, so without
+# this the packer cannot compress anything and every build fails at the last
+# step, after the long part has already run.
+#
+# Both are seed actions and they are named as such: this is the only place where
+# files enter the tree outside a transaction.
+SeedIntoTree() {
+	local Source="$1" Extract
+	[ -f "$Source" ] || return 1
+	Extract="$(mktemp -d)"
+	if ! tar -xf "$Source" -C "$Extract" 2>/dev/null &&
+		! tar --zstd -xf "$Source" -C "$Extract" 2>/dev/null; then
+		rm -rf "$Extract"
+		return 1
+	fi
+	if [ -d "$Extract/rootfs" ]; then
+		cp -a "$Extract/rootfs"/. "$RootfsDirectory"/ 2>/dev/null || true
+	fi
+	rm -rf "$Extract"
+	return 0
+}
+
 if [ ! -x "$RootfsDirectory$OaaToolsInside/oaa-build" ]; then
 	Archive="${OKRA_OKRAPM_ARCHIVE:-}"
 	[ -f "$Archive" ] || {
@@ -123,22 +148,55 @@ if [ ! -x "$RootfsDirectory$OaaToolsInside/oaa-build" ]; then
 		exit 1
 	}
 	echo "== taking the packer out of $(basename "$Archive")"
-	Extract="$(mktemp -d)"
-	tar -xf "$Archive" -C "$Extract" 2>/dev/null || tar --zstd -xf "$Archive" -C "$Extract" 2>/dev/null || {
+	SeedIntoTree "$Archive" || {
 		echo "rebuild-packages: the package manager archive would not open" >&2
 		exit 1
 	}
-	mkdir -p "$RootfsDirectory$OaaToolsInside"
-	cp -a "$Extract/rootfs/usr/lib/okrapm/." "$RootfsDirectory$OaaToolsInside/" 2>/dev/null || true
-	cp -a "$Extract/rootfs/usr/bin/oaa" "$RootfsDirectory/usr/bin/oaa" 2>/dev/null || true
-	rm -rf "$Extract"
 	chmod +x "$RootfsDirectory$OaaToolsInside"/* 2>/dev/null || true
 	[ -x "$RootfsDirectory$OaaToolsInside/oaa-build" ] || {
 		echo "rebuild-packages: the archive carried no oaa-build" >&2
 		exit 1
 	}
 	echo "== the packer is in the tree"
-	ls "$RootfsDirectory$OaaToolsInside" | sed 's/^/   /'
+fi
+
+# The libraries the tree was assembled without. They are checked for by soname
+# rather than by package, because what matters is that the loader can resolve
+# them, not which archive they came from.
+for Library in liblz4.so.1 libcrypt.so.1; do
+	if [ -e "$RootfsDirectory/usr/lib/$Library" ] || [ -e "$RootfsDirectory/lib64/$Library" ]; then
+		continue
+	fi
+	case "$Library" in
+		liblz4.so.1)     Prefix="app.lz4@" ;;
+		libcrypt.so.1)   Prefix="app.libxcrypt@" ;;
+		*)               Prefix="" ;;
+	esac
+	Found=""
+	for Candidate in "$RepositoryDirectory"/artifacts/*.oaa; do
+		[ -f "$Candidate" ] || continue
+		case "$(basename "$Candidate")" in
+			"$Prefix"*) Found="$Candidate"; break ;;
+		esac
+	done
+	[ -n "$Found" ] || {
+		echo "rebuild-packages: the tree has no $Library and the repository has no package for it" >&2
+		exit 1
+	}
+	echo "== putting $Library into the tree from $(basename "$Found")"
+	SeedIntoTree "$Found" || {
+		echo "rebuild-packages: $Found would not open" >&2
+		exit 1
+	}
+done
+# The loader cache is rebuilt so the new libraries are found by the name their
+# dependants ask for.
+Ldconfig="$RootfsDirectory/sbin/ldconfig"
+[ -x "$Ldconfig" ] || Ldconfig="$RootfsDirectory/usr/sbin/ldconfig"
+if [ -x "$Ldconfig" ] && [ -x "$RootfsDirectory/lib64/ld-linux-x86-64.so.2" ]; then
+	"$RootfsDirectory/lib64/ld-linux-x86-64.so.2" \
+		--library-path "$RootfsDirectory/usr/lib64:$RootfsDirectory/usr/lib:$RootfsDirectory/lib64:$RootfsDirectory/lib" \
+		"$Ldconfig" -r "$RootfsDirectory" >/dev/null 2>&1 && echo "== the loader cache was refreshed"
 fi
 
 # The build script's only host assumption is the one function that reaches for a
@@ -256,19 +314,44 @@ trap - EXIT
 
 # The archives come back out of the tree, because the host is what publishes
 # them and what rebuilds the repository index.
+#
+# Each one is checked against its own sidecar before it is taken. The packer
+# writes the checksum only after the archive is complete, so a truncated file
+# either has no sidecar or does not match it, and a build that died while
+# compressing cannot pass as one that worked. That is exactly what happened
+# once: fifty truncated archives were collected and reported as rebuilt.
 echo "== collecting the rebuilt packages"
 Count=0
+Damaged=0
 for Archive in "$RootfsDirectory"/tmp/okra-artifacts/*/*.oaa; do
 	[ -f "$Archive" ] || continue
+	Sum="$Archive.sha256"
+	if [ ! -f "$Sum" ]; then
+		echo "!! $(basename "$Archive") has no checksum, so it is not known to be complete" >&2
+		Damaged=$((Damaged + 1))
+		continue
+	fi
+	Expected="$(awk 'NR == 1 {print $1}' "$Sum")"
+	Actual="$(sha256sum "$Archive" | awk '{print $1}')"
+	if [ "$Expected" != "$Actual" ]; then
+		echo "!! $(basename "$Archive") does not match its checksum" >&2
+		Damaged=$((Damaged + 1))
+		continue
+	fi
 	cp -f "$Archive" "$OutputDirectory/"
-	[ -f "$Archive.sha256" ] && cp -f "$Archive.sha256" "$OutputDirectory/"
+	cp -f "$Sum" "$OutputDirectory/"
 	Count=$((Count + 1))
 done
-echo "== $Count archives came back"
+echo "== $Count archives came back intact"
+[ "$Damaged" -eq 0 ] || echo "== $Damaged archives were damaged and left behind" >&2
 [ "$Count" -gt 0 ] || { echo "rebuild-packages: no archives were produced" >&2; exit 1; }
 
 [ "$InnerStatus" -eq 0 ] || {
 	echo "rebuild-packages: $Count packages were rebuilt but not all of them succeeded" >&2
+	exit 1
+}
+[ "$Damaged" -eq 0 ] || {
+	echo "rebuild-packages: some archives did not survive the packer" >&2
 	exit 1
 }
 echo "== done"

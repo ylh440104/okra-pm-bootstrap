@@ -181,12 +181,13 @@ jobs:
             ./scripts/rebuild-packages.sh \
             "$RUNNER_TEMP/okra-rootfs" \
             "$RUNNER_TEMP/okra-packages-repo/packages" \
+            ./repo \
             "$RUNNER_TEMP/okra-rebuilt" \
             > "$RUNNER_TEMP/rebuild-packages.log" 2>&1 || {
-              tail -60 "$RUNNER_TEMP/rebuild-packages.log" >&2
+              tail -80 "$RUNNER_TEMP/rebuild-packages.log" >&2
               exit 1
             }
-          tail -40 "$RUNNER_TEMP/rebuild-packages.log"
+          grep -E '^(==|ok |FAIL|!!)' "$RUNNER_TEMP/rebuild-packages.log" | tail -30
           sudo chown -R "$(id -u):$(id -g)" "$RUNNER_TEMP/okra-rootfs" "$RUNNER_TEMP/okra-rebuilt"
 
       - name: Pack the toolchain the system built for itself
