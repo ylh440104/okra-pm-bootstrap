@@ -4,17 +4,17 @@
 # This is the step the bootstrap has been missing. Everything up to here was
 # cross compiled: a toolchain living on the runner produced every binary in the
 # userland, so nothing in there ever built anything. Here the userland is
-# entered and the toolchain is rebuilt by the compiler that is already inside
-# it, which is what makes the system self hosting rather than merely self
-# contained.
+# entered and the toolchain is rebuilt by the compiler already inside it, which
+# is what makes the system self hosting rather than merely self contained.
 #
 # It rebuilds binutils and gcc. glibc is deliberately left alone: replacing the
 # C library of a running system in place needs a two phase install and a
 # reboot, which is a separate exercise from proving the compiler compiles
 # itself. That gap is reported at the end rather than glossed over.
 #
-# The sources are fetched into the userland and the builds happen there, so the
-# compiler, the linker and the makefiles are all the userland's own.
+# The inner script is a quoted heredoc, so its variables are the userland's.
+# Settings reach it through the environment, which is also how the build knows
+# how many jobs to run and which versions to fetch.
 #
 # Usage: rebuild-native.sh <rootfs-dir>
 # Environment:
@@ -22,7 +22,8 @@
 #   OKRA_BINUTILS_VERSION   default 2.44, matching the cross toolchain
 #   OKRA_GCC_VERSION        default 16.2.0, matching the cross toolchain
 #   OKRA_GNU_MIRROR         default https://mirrors.kernel.org/gnu
-# Return: 0 when the userland builds and runs a program with its own new gcc.
+# Return: 0 only when the userland built its own compiler and ran a program
+#         with it. Any failure before that is reported and exits non-zero.
 set -uo pipefail
 
 RootfsDirectory="${1:?usage: rebuild-native.sh <rootfs-dir>}"
@@ -53,10 +54,19 @@ Fetch() {
 	return 0
 }
 
+# ShowToolchain() - print the version of the compiler or linker in the tree.
+# @Program: path under the rootfs, such as usr/bin/gcc.
+# Return: 0. Prints nothing useful if the program will not run.
+ShowToolchain() {
+	local Program="$1"
+	"$RootfsDirectory/lib64/ld-linux-x86-64.so.2" \
+		--library-path "$RootfsDirectory/usr/lib64:$RootfsDirectory/usr/lib:$RootfsDirectory/lib64:$RootfsDirectory/lib" \
+		"$RootfsDirectory/$Program" --version 2>/dev/null | head -1 || true
+}
+
 echo "== fetching the sources into the userland"
-# A native gcc build wants a few gigabytes of scratch space, so the room left
-# is reported before anything is unpacked rather than as a failure in the
-# middle of a make.
+# A native gcc build wants a few gigabytes of scratch space, so the room left is
+# reported before anything is unpacked rather than as a failure mid-make.
 df -h "$RootfsDirectory" | tail -1
 Fetch "$Mirror/binutils/binutils-$BinutilsVersion.tar.xz" "$Sources/binutils.tar.xz" || {
 	echo "rebuild-native: could not fetch binutils" >&2
@@ -68,15 +78,19 @@ Fetch "$Mirror/gcc/gcc-$GccVersion/gcc-$GccVersion.tar.xz" "$Sources/gcc.tar.xz"
 }
 ls -la "$Sources"
 
-# Record what the toolchain looked like before, so the change is visible in the
-# log rather than only asserted.
+# The fingerprint of the compiler before the rebuild. gcc prints a sha256 of its
+# own configuration as the last line of --version, and that changes when the
+# binary changes, so comparing it is what shows the rebuild actually replaced
+# something rather than the script merely exiting zero.
 echo "== the compiler that is about to be replaced"
-"$RootfsDirectory/lib64/ld-linux-x86-64.so.2" \
-	--library-path "$RootfsDirectory/usr/lib64:$RootfsDirectory/usr/lib:$RootfsDirectory/lib64:$RootfsDirectory/lib" \
-	"$RootfsDirectory/usr/bin/gcc" --version 2>/dev/null | head -1 || true
+ShowToolchain usr/bin/gcc
+Before="$(ShowToolchain usr/bin/gcc)"
+[ -n "$Before" ] || { echo "rebuild-native: the userland gcc does not run" >&2; exit 1; }
 
 echo "== entering the userland"
-cat > "$RootfsDirectory/usr/src/native/inner.sh" <<INNER
+# The heredoc is quoted, so everything inside runs as written in the userland.
+# The settings it needs arrive as environment variables.
+cat > "$RootfsDirectory/usr/src/native/inner.sh" <<'INNER'
 #!/bin/bash
 # Runs inside the Okra userland. Nothing here reaches outside it: the compiler,
 # the linker, make and the sources are all in this tree.
@@ -86,15 +100,15 @@ export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 export LC_ALL=C
 export TZ=UTC
 export HOME=/root
-export MAKEFLAGS=-j$Jobs
+export MAKEFLAGS="-j${OKRA_JOBS}"
 
 cd /usr/src/native || exit 1
 
 echo "== what is doing the building"
-command -v gcc
+command -v gcc || exit 1
 gcc --version | head -1
 gcc -dumpmachine
-command -v ld
+command -v ld || exit 1
 ld --version | head -1
 
 echo "== extracting the sources"
@@ -102,44 +116,42 @@ rm -rf binutils-src gcc-src
 mkdir -p binutils-src gcc-src
 tar -xf binutils.tar.xz -C binutils-src --strip-components=1 || exit 1
 tar -xf gcc.tar.xz -C gcc-src --strip-components=1 || exit 1
-echo "== binutils source at \$(du -sh binutils-src | cut -f1), gcc source at \$(du -sh gcc-src | cut -f1)"
+echo "== sources unpacked"
 
-echo "== building binutils $BinutilsVersion, natively"
+echo "== building binutils ${OKRA_BINUTILS_VERSION}, natively"
 rm -rf binutils-build
 mkdir binutils-build
 cd binutils-build || exit 1
-# gprofng is the bundled profiler, and its libcollector does not compile under
-# gcc 16: iolib.c trips over a _Generic that the newer compiler rejects. It is
-# not part of a toolchain - as, ld, ar and the rest are what a build needs - so
-# it is switched off rather than patched.
+# gprofng is the profiler binutils bundles, and its libcollector does not build
+# under gcc 16: iolib.c trips over a _Generic the newer compiler rejects. A
+# toolchain does not need the profiler, so it is switched off.
 ../binutils-src/configure --prefix=/usr --disable-nls --disable-werror --disable-gprofng || exit 1
-make -j$Jobs || exit 1
+make || exit 1
 make install || exit 1
 cd /usr/src/native || exit 1
 echo "== the linker now in place"
 /usr/bin/ld --version | head -1
 
-echo "== building gcc $GccVersion, natively"
+echo "== building gcc ${OKRA_GCC_VERSION}, natively"
 # download_prerequisites is not run: it fetches gmp, mpfr and mpc from
-# gcc.gnu.org with wget, and the userland's wget was built without HTTPS. The
-# three libraries are already in this system as packages - headers in
-# /usr/include, libraries in /usr/lib - so the build is pointed at them
-# instead. That is also the more honest arrangement: a system that can only
-# rebuild itself by downloading the same libraries again is not self hosting.
+# gcc.gnu.org with wget, and this userland's wget was built without HTTPS. The
+# three libraries are already packages here - headers in /usr/include, libraries
+# in /usr/lib - so the build is pointed at them instead. A system that can only
+# rebuild itself by fetching its own dependencies again is not self hosting.
 for Header in gmp.h mpfr.h mpc.h; do
-	[ -f "/usr/include/$Header" ] || {
-		echo "missing /usr/include/$Header, which gcc needs to build" >&2
+	if [ ! -f "/usr/include/${Header}" ]; then
+		echo "missing /usr/include/${Header}, which gcc needs to build" >&2
 		exit 1
-	}
+	fi
 done
-echo "== gmp, mpfr and mpc are in the system"
+echo "== gmp, mpfr and mpc are already in the system"
 rm -rf gcc-build
 mkdir gcc-build
 cd gcc-build || exit 1
-# --disable-bootstrap builds gcc once with the gcc that is already here, rather
-# than three times over to check the output is stable. One pass is what shows
-# the system can compile its own compiler; the three pass check is a separate
-# question about reproducibility and would triple the time.
+# --disable-bootstrap builds gcc once with the compiler already present, rather
+# than three times over to check the result is stable. One pass is what shows
+# the system can compile its own compiler; the stability check is a separate
+# question and would triple the time.
 ../gcc-src/configure \
 	--prefix=/usr \
 	--enable-languages=c,c++ \
@@ -147,7 +159,7 @@ cd gcc-build || exit 1
 	--disable-multilib \
 	--disable-nls \
 	--with-gmp=/usr --with-mpfr=/usr --with-mpc=/usr || exit 1
-make -j$Jobs || exit 1
+make || exit 1
 make install || exit 1
 cd /usr/src/native || exit 1
 
@@ -156,30 +168,14 @@ echo "== the compiler now in place"
 /usr/bin/gcc -dumpmachine
 
 echo "== it compiles and runs a program"
-cat > /usr/src/native/hello.c <<'HELLO'
-#include <stdio.h>
+printf '%s\n' '#include <stdio.h>' 'int main(void) { printf("built by the toolchain this system compiled for itself\n"); return 0; }' > hello.c
+/usr/bin/gcc -O2 -o hello hello.c || exit 1
+./hello || exit 1
 
-int main(void)
-{
-	printf("built by the toolchain this system compiled for itself\\n");
-	return 0;
-}
-HELLO
-/usr/bin/gcc -O2 -o /usr/src/native/hello /usr/src/native/hello.c || exit 1
-/usr/src/native/hello || exit 1
-
-echo "== and the C++ front end works too"
-cat > /usr/src/native/hello.cc <<'HELLOXX'
-#include <iostream>
-
-int main()
-{
-	std::cout << "and by its C++ front end" << std::endl;
-	return 0;
-}
-HELLOXX
-/usr/bin/g++ -O2 -o /usr/src/native/helloxx /usr/src/native/hello.cc || exit 1
-/usr/src/native/helloxx || exit 1
+echo "== and its C++ front end works too"
+printf '%s\n' '#include <iostream>' 'int main() { std::cout << "and by its C++ front end" << std::endl; return 0; }' > hello.cc
+/usr/bin/g++ -O2 -o helloxx hello.cc || exit 1
+./helloxx || exit 1
 
 echo "== done"
 INNER
@@ -199,11 +195,18 @@ CleanupMounts() {
 }
 trap CleanupMounts EXIT
 
+# The settings travel through the environment, which is how they reach a
+# quoted heredoc without the outer shell touching its variables.
 chroot "$RootfsDirectory" /usr/bin/env -i \
 	PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
 	HOME=/root \
-	/bin/bash /usr/src/native/inner.sh || {
-	echo "rebuild-native: the in-userland rebuild failed" >&2
+	OKRA_JOBS="$Jobs" \
+	OKRA_BINUTILS_VERSION="$BinutilsVersion" \
+	OKRA_GCC_VERSION="$GccVersion" \
+	/bin/bash /usr/src/native/inner.sh
+InnerStatus=$?
+[ "$InnerStatus" -eq 0 ] || {
+	echo "rebuild-native: the in-userland rebuild failed with status $InnerStatus" >&2
 	exit 1
 }
 
@@ -211,9 +214,21 @@ CleanupMounts
 trap - EXIT
 
 echo "== the toolchain in the userland is now the one it built"
-"$RootfsDirectory/lib64/ld-linux-x86-64.so.2" \
-	--library-path "$RootfsDirectory/usr/lib64:$RootfsDirectory/usr/lib:$RootfsDirectory/lib64:$RootfsDirectory/lib" \
-	"$RootfsDirectory/usr/bin/gcc" --version 2>/dev/null | head -1 || true
+ShowToolchain usr/bin/gcc
+After="$(ShowToolchain usr/bin/gcc)"
+[ -n "$After" ] || { echo "rebuild-native: the rebuilt gcc does not run" >&2; exit 1; }
+
+# The comparison is the point: without it a script that quietly did nothing
+# would look exactly like one that worked, which is what happened once already.
+if [ "$Before" = "$After" ]; then
+	echo "rebuild-native: gcc is unchanged, so nothing was actually rebuilt" >&2
+	echo "  before: $Before" >&2
+	echo "  after:  $After" >&2
+	exit 1
+fi
+echo "== and it is not the one that went in"
+echo "   before: $Before"
+echo "   after:  $After"
 
 echo "== what is still cross built"
 echo "   glibc, the C library: replacing it in place needs a two phase install"
