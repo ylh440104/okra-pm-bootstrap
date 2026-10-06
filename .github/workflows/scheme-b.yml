@@ -46,7 +46,9 @@ env:
 jobs:
   scheme-b:
     runs-on: ubuntu-24.04
-    timeout-minutes: 300
+    # The native rebuild is the long part: gcc alone is tens of minutes at four
+    # jobs, on top of everything the cross build already did.
+    timeout-minutes: 420
     steps:
       - uses: actions/checkout@v4
         with:
@@ -99,6 +101,20 @@ jobs:
           ./scripts/assemble-userland.sh \
             "$RUNNER_TEMP/okra-rootfs" \
             "$RUNNER_TEMP/okra-packages"
+
+      - name: Rebuild the toolchain inside the userland
+        env:
+          OKRA_JOBS: '4'
+        run: |
+          set -euo pipefail
+          # The step that makes this a bootstrap rather than a cross build. The
+          # userland is entered and binutils and gcc are rebuilt by the compiler
+          # already inside it, so the toolchain stops being something that lives
+          # on the runner.
+          #
+          # It takes a while: gcc alone is tens of minutes.
+          sudo -E ./scripts/rebuild-native.sh "$RUNNER_TEMP/okra-rootfs"
+          sudo chown -R "$(id -u):$(id -g)" "$RUNNER_TEMP/okra-rootfs"
 
       - name: Compile the package manager inside the userland
         env:
