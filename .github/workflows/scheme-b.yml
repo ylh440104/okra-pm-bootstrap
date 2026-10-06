@@ -46,8 +46,9 @@ env:
 jobs:
   scheme-b:
     runs-on: ubuntu-24.04
-    # The native rebuilds are the long part: binutils and gcc once, then libxcrypt
-# and glibc again, at four jobs each, on top of everything the cross build did.
+    # The native rebuilds are the long part: binutils and gcc once, then
+    # libxcrypt and glibc again, at four jobs each, on top of everything the
+    # cross build did.
     timeout-minutes: 600
     steps:
       - uses: actions/checkout@v4
@@ -199,13 +200,10 @@ jobs:
         run: |
           set -euo pipefail
           Tag="okra-repo"
+          Notes="The OkraPM software source produced by scheme B: the bootstrapped x86_64 packages in the layout lunar syncs, plus the package manager compiled by the userland itself.\n\nThe index here lists every package in the repository. This release carries the ones this workflow produced - the package manager, the sample, the two libraries the tree was missing, and the toolchain the system compiled for itself. The seventy bootstrapped packages the index also lists live in okra-userland, which is where they were published; they are not copied here because they do not change between runs.\n\nRunning the workflow reproduces the whole repository, index and archives together."
           gh release view "$Tag" >/dev/null 2>&1 || gh release create "$Tag" \
             --title "Okra software source" \
-            --notes "The OkraPM software source produced by scheme B: the bootstrapped x86_64 packages in the layout lunar syncs, plus the package manager compiled by the userland itself.
-
-The index here lists every package in the repository. This release carries the ones this workflow produced - the package manager, the sample, the two libraries the tree was missing, and the toolchain the system compiled for itself. The seventy bootstrapped packages the index also lists live in okra-userland, which is where they were published; they are not copied here because they do not change between runs.
-
-Running the workflow reproduces the whole repository, index and archives together."
+            --notes "$(printf '%b' "$Notes")"
           # The archives this workflow produced: the package manager, the sample,
           # the two libraries the tree was missing, and the toolchain the system
           # compiled for itself. The seventy bootstrapped packages are already
