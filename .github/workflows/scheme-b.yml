@@ -42,6 +42,7 @@ env:
   OKRA_TOOLCHAIN: /opt/okra-toolchain
   OKRA_TARGET_TRIPLE: x86_64-okra-linux-gnu
   OKRA_TOOLCHAIN_SOURCE_REPOSITORY: ylh440104/okra-oaa-packages-x86_64
+  OKRA_PACKAGES_SOURCE_REPOSITORY: ylh440104/okra-oaa-packages-x86_64
 
 jobs:
   scheme-b:
@@ -85,6 +86,17 @@ jobs:
           # in-userland build applies: without it, installing mangles every
           # package whose libraries are a chain of symlinks.
           ./scripts/patch-okrapm.sh vendor/okrapm
+
+      - name: Fetch the recipes the packages were built from
+        run: |
+          set -euo pipefail
+          # The recipes and the build script are what produced the cross built
+          # packages. The rebuild inside the userland uses them unchanged, so
+          # the only thing that differs between the two builds is the compiler.
+          git clone -q --depth 1 --branch "${OKRA_PACKAGES_REF:-main}" \
+            "https://github.com/$OKRA_PACKAGES_SOURCE_REPOSITORY.git" \
+            "$RUNNER_TEMP/okra-packages-repo"
+          ls "$RUNNER_TEMP/okra-packages-repo/packages" | wc -l
 
       - name: Fetch the bootstrapped packages
         env:
@@ -147,9 +159,40 @@ jobs:
         run: |
           set -euo pipefail
           ./scripts/publish-repo.sh
+      - name: Rebuild the userland packages inside the userland
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          OKRA_JOBS: '4'
+          OKRA_OKRAPM_ARCHIVE: ${{ runner.temp }}/okra-okrapm/Okra.okrapm.oaa
+        run: |
+          set -euo pipefail
+          # The rest of the userland is still cross compiled. These are rebuilt
+          # from their own sources by the compiler the system built, inside the
+          # system, using the same recipes that produced the cross built ones.
+          #
+          # The userland's curl has no TLS, so the sources are fetched here and
+          # handed to the build as file:// URLs; the recipe's sha256 still has
+          # to match, which is what keeps that honest.
+          #
+          # meson and ninja are not packages in this system, so iputils and
+          # systemd cannot be rebuilt here. They are left out and named in the
+          # log rather than failing the run.
+          sudo -E env OKRA_SKIP='iputils systemd' \
+            ./scripts/rebuild-packages.sh \
+            "$RUNNER_TEMP/okra-rootfs" \
+            "$RUNNER_TEMP/okra-packages-repo/packages" \
+            "$RUNNER_TEMP/okra-rebuilt" \
+            > "$RUNNER_TEMP/rebuild-packages.log" 2>&1 || {
+              tail -60 "$RUNNER_TEMP/rebuild-packages.log" >&2
+              exit 1
+            }
+          tail -40 "$RUNNER_TEMP/rebuild-packages.log"
+          sudo chown -R "$(id -u):$(id -g)" "$RUNNER_TEMP/okra-rootfs" "$RUNNER_TEMP/okra-rebuilt"
+
       - name: Pack the toolchain the system built for itself
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          OKRA_REBUILT_DIRECTORY: ${{ runner.temp }}/okra-rebuilt
         run: |
           set -euo pipefail
           # The rebuilds replaced binutils, gcc and glibc in the tree without
@@ -201,25 +244,19 @@ jobs:
         run: |
           set -euo pipefail
           Tag="okra-repo"
-          Notes="The OkraPM software source produced by scheme B: the bootstrapped x86_64 packages in the layout lunar syncs, plus the package manager compiled by the userland itself.\n\nThe index here lists every package in the repository. This release carries the ones this workflow produced - the package manager, the sample, the two libraries the tree was missing, and the toolchain the system compiled for itself. The seventy bootstrapped packages the index also lists live in okra-userland, which is where they were published; they are not copied here because they do not change between runs.\n\nRunning the workflow reproduces the whole repository, index and archives together."
+          Notes="The OkraPM software source produced by scheme B: the whole repository, index and archives together, where every package is the one the system built for itself.\n\nThe toolchain, the C library and the seventy userland packages were all compiled inside the system by the compiler the system produced, from the recipes that built them the first time. Nothing here is cross compiled any more.\n\nRunning the workflow reproduces this from scratch."
           gh release view "$Tag" >/dev/null 2>&1 || gh release create "$Tag" \
             --title "Okra software source" \
             --notes "$(printf '%b' "$Notes")"
-          # The archives this workflow produced: the package manager, the sample,
-          # the two libraries the tree was missing, and the toolchain the system
-          # compiled for itself. The seventy bootstrapped packages are already
-          # published in okra-userland and are not copied again.
+          # The whole repository goes up, not a subset: after the rebuild every archive
+          # in it is the one the system produced, so leaving any of them behind
+          # would mean the published repository does not match its own index.
           mapfile -t Files < <(find repo -maxdepth 2 -type f \
-            \( -name 'index.yaml' \
-               -o -name 'Okra.okrapm@*.oaa' -o -name 'Okra.okrapm@*.oaa.sha256' \
-               -o -name 'Okra.hello@*.oaa' -o -name 'Okra.hello@*.oaa.sha256' \
-               -o -name 'app.lz4@*.oaa' -o -name 'app.lz4@*.oaa.sha256' \
-               -o -name 'app.libxcrypt@*.oaa' -o -name 'app.libxcrypt@*.oaa.sha256' \
-               -o -name 'app.glibc@*.oaa' -o -name 'app.glibc@*.oaa.sha256' \
-               -o -name 'GNU.gcc@*.oaa' -o -name 'GNU.gcc@*.oaa.sha256' \
-               -o -name 'GNU.binutils@*.oaa' -o -name 'GNU.binutils@*.oaa.sha256' \) | sort)
+            \( -name 'index.yaml' -o -name '*.oaa' -o -name '*.oaa.sha256' \) | sort)
           echo "uploading ${#Files[@]} files"
-          printf '%s\n' "${Files[@]}"
-          [ "${#Files[@]}" -ge 3 ] || { echo "nothing to publish" >&2; exit 1; }
+          printf '%s\n' "${Files[@]}" | head -12
+          echo "..."
+          du -ch "${Files[@]}" | tail -1
+          [ "${#Files[@]}" -ge 60 ] || { echo "the repository looks incomplete" >&2; exit 1; }
           gh release upload "$Tag" "${Files[@]}" --clobber
           gh release view "$Tag" --json assets --jq '.assets | length'

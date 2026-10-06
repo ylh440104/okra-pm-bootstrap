@@ -221,17 +221,36 @@ RepackOne 'gcc-*-1.x86_64*.oaa' || exit 1
 # side of that step the repository is read from.
 RepackOne 'app.glibc@*.oaa' || RepackOne 'glibc-*-1.x86_64*.oaa' || exit 1
 
+# The packages the userland rebuilt for itself are already packed, because the
+# packer inside the userland did it. They only need the names the resolver asks
+# for, which is the same rename everything else goes through.
+if [ -n "${OKRA_REBUILT_DIRECTORY:-}" ] && [ -d "$OKRA_REBUILT_DIRECTORY" ]; then
+	echo "== taking in the packages the userland rebuilt for itself"
+	mkdir -p "$OutputDirectory/rebuilt"
+	cp -a "$OKRA_REBUILT_DIRECTORY"/. "$OutputDirectory/rebuilt/"
+	bash "$ScriptDirectory/rename-to-lunar.sh" "$OutputDirectory/rebuilt" || {
+		echo "repack: the rebuilt packages could not all be renamed" >&2
+		exit 1
+	}
+	RebuiltCount="$(ls "$OutputDirectory/rebuilt"/*.oaa 2>/dev/null | wc -l)"
+	echo "== the userland rebuilt $RebuiltCount packages"
+	[ "$RebuiltCount" -gt 50 ] || {
+		echo "repack: far fewer packages came back than were attempted" >&2
+		exit 1
+	}
+fi
+
 # The repacked archives replace the ones the repository was carrying, so the
 # repository describes what the system actually runs on, and the index is
 # rebuilt because the file lists have changed. This is done before the
 # verification so the tree that is installed and inspected is the native one.
 echo "== putting the repacked toolchain into the repository"
-for Archive in "$OutputDirectory"/*.oaa; do
-	[ -f "$Archive" ] || continue
-	Name="$(basename "$Archive")"
+for Source in "$OutputDirectory"/*.oaa "$OutputDirectory"/rebuilt/*.oaa; do
+	[ -f "$Source" ] || continue
+	Name="$(basename "$Source")"
 	rm -f "$RepositoryDirectory/artifacts/$Name" "$RepositoryDirectory/artifacts/$Name.sha256"
-	cp -f "$Archive" "$RepositoryDirectory/artifacts/$Name"
-	cp -f "$Archive.sha256" "$RepositoryDirectory/artifacts/$Name.sha256"
+	cp -f "$Source" "$RepositoryDirectory/artifacts/$Name"
+	[ -f "$Source.sha256" ] && cp -f "$Source.sha256" "$RepositoryDirectory/artifacts/$Name.sha256"
 	echo "== replaced $Name"
 done
 bash "$ScriptDirectory/build-index.sh" "$RepositoryDirectory" || exit 1

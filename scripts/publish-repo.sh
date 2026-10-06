@@ -78,51 +78,10 @@ AddOkrapm() {
 }
 
 # RenameToLunarNames() - give every human named archive its resolver name.
-# Return: 0. Archives whose meta.yaml cannot be read are reported and skipped.
-#
-# The namespace and name come out of the meta.yaml, and the version is put
-# through LunarVersion so the file is named the way the resolver will ask for
-# it. Both matter: the resolver builds the name it fetches from what it parsed,
-# not from what the archive says.
+# Return: 0. The work is in scripts/rename-to-lunar.sh, which the rebuild step
+# also uses; keeping one copy means the two cannot drift apart.
 RenameToLunarNames() {
-	local Archive Namespace Name Version Wanted
-	local Renamed=0 Skipped=0
-	for Archive in "$OutputDirectory/artifacts"/*.oaa; do
-		[ -f "$Archive" ] || continue
-		Namespace="$(ExtractMetaField "$Archive" namespace || true)"
-		Name="$(ExtractMetaField "$Archive" name || true)"
-		Version="$(ExtractMetaField "$Archive" version || true)"
-		if [ -z "$Namespace" ] || [ -z "$Name" ] || [ -z "$Version" ]; then
-			echo "== cannot read the identity of $(basename "$Archive")" >&2
-			Skipped=$((Skipped + 1))
-			continue
-		fi
-		if ! Version="$(LunarVersion "$Version")"; then
-			echo "== the resolver cannot parse the version of $(basename "$Archive")" >&2
-			Skipped=$((Skipped + 1))
-			continue
-		fi
-		Wanted="$OutputDirectory/artifacts/$Namespace.$Name@$Version.oaa"
-		if [ "$Archive" = "$Wanted" ]; then
-			continue
-		fi
-		if [ -e "$Wanted" ]; then
-			echo "== $Namespace.$Name@$Version.oaa already exists" >&2
-			Skipped=$((Skipped + 1))
-			continue
-		fi
-		# The sidecar checksum has to be renamed with the archive. Left behind
-		# under the old name it is not wrong, just unreachable: anything that
-		# verifies a download looks for it beside the archive it is checking.
-		if [ -f "$Archive.sha256" ]; then
-			mv -f "$Archive.sha256" "$Wanted.sha256"
-		fi
-		mv -f "$Archive" "$Wanted"
-		Renamed=$((Renamed + 1))
-	done
-	echo "== renamed $Renamed archives to the names the resolver asks for"
-	[ "$Skipped" -eq 0 ] || echo "== $Skipped archives could not be renamed" >&2
-	return 0
+	bash "$ScriptDirectory/rename-to-lunar.sh" "$OutputDirectory/artifacts"
 }
 
 # AddMissingPackages() - build the two libraries the userland turned out not to
