@@ -146,6 +146,21 @@ jobs:
         run: |
           set -euo pipefail
           ./scripts/publish-repo.sh
+      - name: Pack the toolchain the system built for itself
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          # The rebuilds replaced binutils, gcc and glibc in the tree without
+          # telling the package manager, so the database still records the cross
+          # built archives. Repacking the toolchain from the tree is the step the
+          # bootstrap document calls the completion marker, and it is also what
+          # makes the repository describe what the system actually runs on.
+          ./scripts/repack-native-toolchain.sh \
+            "$RUNNER_TEMP/okra-rootfs" \
+            "$RUNNER_TEMP/okra-packages" \
+            "$RUNNER_TEMP/okra-native"
+
       - name: Build the host lunar for the verification
         run: |
           set -euo pipefail

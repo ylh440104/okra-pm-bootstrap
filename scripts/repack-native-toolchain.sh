@@ -1,0 +1,201 @@
+#!/bin/bash
+# repack-native-toolchain.sh - pack the toolchain the system built for itself.
+#
+# rebuild-native.sh and rebuild-libc.sh compile binutils, gcc and glibc inside
+# the userland and install them into the tree. What they do not do is tell the
+# package manager: the system database still records the cross built archives,
+# and the repository still serves them. So the tree runs on a toolchain that no
+# package describes.
+#
+# This closes that gap. The toolchain the system compiled is packed as an
+# ordinary package, with the same identity as the one it replaces and a bumped
+# release, so the repository and the tree agree again. That is the step the
+# bootstrap document calls the completion marker: rebuild the toolchain with
+# itself, then package the result.
+#
+# The file list comes from the package being replaced rather than from a scan of
+# the tree. A scan would sweep in everything under /usr, including the package
+# manager and the sample package, and produce one enormous package instead of
+# three that match what they replace.
+#
+# Usage: repack-native-toolchain.sh <rootfs-dir> <packages-dir> <output-dir>
+# Environment:
+#   OKRA_OAATOOLS  holds oaa-build (default <repo root>/vendor/okrapm/oaatools)
+#   OKRA_REPACK_RELEASE  release to record (default 2)
+# Return: 0 when every toolchain package was repacked, 1 otherwise.
+set -uo pipefail
+
+RootfsDirectory="${1:?usage: repack-native-toolchain.sh <rootfs-dir> <packages-dir> <output-dir>}"
+PackagesDirectory="${2:?usage: repack-native-toolchain.sh <rootfs-dir> <packages-dir> <output-dir>}"
+OutputDirectory="${3:?usage: repack-native-toolchain.sh <rootfs-dir> <packages-dir> <output-dir>}"
+ScriptDirectory="$(cd "$(dirname "$0")" && pwd)"
+RepositoryRoot="${OKRA_REPO_ROOT:-$(cd "$ScriptDirectory/.." && pwd)}"
+OaaTools="${OKRA_OAATOOLS:-$RepositoryRoot/vendor/okrapm/oaatools}"
+Release="${OKRA_REPACK_RELEASE:-2}"
+
+[ -d "$RootfsDirectory" ] || { echo "repack: no rootfs at $RootfsDirectory" >&2; exit 1; }
+[ -d "$PackagesDirectory" ] || { echo "repack: no packages at $PackagesDirectory" >&2; exit 1; }
+[ -x "$OaaTools/oaa-build" ] || { echo "repack: no oaa-build at $OaaTools" >&2; exit 1; }
+
+. "$ScriptDirectory/lib-oaa.sh"
+
+WorkRoot="${RUNNER_TEMP:-${TMPDIR:-/tmp}}/okra-repack"
+rm -rf "$WorkRoot"
+mkdir -p "$WorkRoot" "$OutputDirectory"
+
+# RepackOne() - repack the files of one published package from the tree.
+#
+# @Pattern: glob for the archive being replaced, such as 'gcc-*-1.x86_64*.oaa'.
+# Return: 0 when a new archive and its checksum were written, 1 otherwise.
+RepackOne() {
+	local Pattern="$1" Source
+	Source="$(find "$PackagesDirectory" -maxdepth 1 -name "$Pattern" -print -quit 2>/dev/null)"
+	if [ -z "$Source" ]; then
+		echo "repack: no archive matching $Pattern in $PackagesDirectory" >&2
+		return 1
+	fi
+
+	local Namespace Name Version
+	Namespace="$(ExtractMetaField "$Source" namespace || true)"
+	Name="$(ExtractMetaField "$Source" name || true)"
+	Version="$(ExtractMetaField "$Source" version || true)"
+	[ -n "$Namespace" ] && [ -n "$Name" ] && [ -n "$Version" ] || {
+		echo "repack: cannot read the identity of $(basename "$Source")" >&2
+		return 1
+	}
+	echo "== repacking $Namespace.$Name $Version from the tree"
+
+	local Stage="$WorkRoot/$Name-stage"
+	rm -rf "$Stage"
+	mkdir -p "$Stage/rootfs"
+
+	# The file list is read out of the archive being replaced and expanded: an
+	# entry can be a directory, which means everything under it. Each file is
+	# copied from the tree, so what goes into the new package is what the system
+	# compiled, not what was shipped.
+	ExtractMeta "$Source" > "$WorkRoot/$Name.meta" || return 1
+	python3 - "$RootfsDirectory" "$Stage/rootfs" "$WorkRoot/$Name.meta" <<'PY'
+import os, shutil, sys
+
+root, stage, meta = sys.argv[1], sys.argv[2], sys.argv[3]
+
+# Only the files: section is read, and it ends at the next top level key rather
+# than at the first blank line.
+listing = []
+section = None
+for line in open(meta):
+    line = line.rstrip('\n')
+    if line and not line[0].isspace() and ':' in line:
+        section = 'files' if line.startswith('files:') else None
+        continue
+    if section == 'files' and line.strip().startswith('- '):
+        entry = line.strip()[2:].strip().strip('"')
+        if entry:
+            listing.append(entry)
+
+if not listing:
+    print('the archive declares no files', file=sys.stderr)
+    sys.exit(1)
+
+# A directory entry covers everything below it, so the list is expanded against
+# the tree rather than against the archive.
+expanded = []
+for entry in listing:
+    full = root + entry
+    if os.path.islink(full) or os.path.isfile(full):
+        expanded.append(entry)
+    elif os.path.isdir(full):
+        for base, dirs, files in os.walk(full):
+            for name in files:
+                path = os.path.join(base, name)
+                expanded.append('/' + os.path.relpath(path, root))
+
+copied = missing = 0
+seen = set()
+absent = []
+for entry in expanded:
+    if entry in seen:
+        continue
+    seen.add(entry)
+    source = root + entry
+    target = stage + entry
+    if os.path.islink(source):
+        os.makedirs(os.path.dirname(target), exist_ok=True)
+        if os.path.lexists(target):
+            os.remove(target)
+        os.symlink(os.readlink(source), target)
+    elif os.path.isfile(source):
+        os.makedirs(os.path.dirname(target), exist_ok=True)
+        shutil.copy2(source, target, follow_symlinks=False)
+    else:
+        missing += 1
+        absent.append(entry)
+        continue
+    copied += 1
+
+print('staged %d entries, %d declared but absent from the tree' % (copied, missing))
+if missing:
+    # The names matter more than the count: they say how the native build
+    # differs from the cross one, which is what has to be understood before the
+    # package can be replaced by it.
+    print('repack: the tree is missing files the package declares:', file=sys.stderr)
+    for entry in absent[:25]:
+        print('    %s' % entry, file=sys.stderr)
+    if len(absent) > 25:
+        print('    ... and %d more' % (len(absent) - 25), file=sys.stderr)
+    sys.exit(1)
+if copied < 10:
+    print('repack: only %d entries were staged' % copied, file=sys.stderr)
+    sys.exit(1)
+PY
+	[ "$?" -eq 0 ] || return 1
+
+	# The point of the exercise is that these are the binaries the system built,
+	# so they are checked for the target before being packed. A cross built
+	# archive would be x86_64 as well, so this is not what proves it; the
+	# fingerprint the rebuild scripts printed is. This catches the other
+	# mistake, which is staging something that is not an ELF at all.
+	local Machine Checked=0
+	while IFS= read -r Candidate; do
+		head -c 4 "$Candidate" | grep -q $'\x7fELF' || continue
+		Machine="$(od -An -N2 -j18 -tu2 "$Candidate" | tr -d ' ')"
+		[ "$Machine" = "62" ] || {
+			echo "repack: $Candidate is not an x86_64 ELF" >&2
+			return 1
+		}
+		Checked=$((Checked + 1))
+	done < <(find "$Stage/rootfs" -type f 2>/dev/null)
+	echo "ok   $Checked x86_64 ELF files staged"
+
+	{
+		echo "name: $Name"
+		echo "namespace: $Namespace"
+		echo "version: $Version"
+		echo "release: $Release"
+		echo "description: \"$(ExtractMetaField "$Source" description || echo '') (built by the system itself)\""
+		echo "architecture: x86_64"
+		echo "abi: OAABI1"
+		echo "maintainer: \"ylh440104 <ylh440104@users.noreply.github.com>\""
+		echo "installed_size: $(du -sm "$Stage/rootfs" | cut -f1)"
+		echo "dependencies:"
+		echo "  - app.glibc"
+		echo "files:"
+		( cd "$Stage/rootfs" && find . -mindepth 1 \( -type f -o -type l \) -printf '/%P\n' | LC_ALL=C sort ) |
+			sed 's/^/  - /'
+	} > "$Stage/meta.yaml"
+
+	local ArchiveName="$Namespace.$Name@$Version.oaa"
+	"$OaaTools/oaa-build" "$Stage" -o "$OutputDirectory/$ArchiveName" || return 1
+	[ -f "$OutputDirectory/$ArchiveName" ] || return 1
+	[ -f "$OutputDirectory/$ArchiveName.sha256" ] || return 1
+	echo "== repacked $ArchiveName"
+	return 0
+}
+
+RepackOne 'binutils-*-1.x86_64*.oaa' || exit 1
+RepackOne 'gcc-*-1.x86_64*.oaa' || exit 1
+RepackOne 'glibc-*-1.x86_64*.oaa' || exit 1
+
+echo "== the toolchain the system built for itself"
+ls -la "$OutputDirectory"
+echo "== done"
