@@ -51,11 +51,13 @@ mkdir -p "$WorkRoot" "$OutputDirectory"
 #
 # The archive being replaced is looked for in the repository as well as in the
 # download directory: app.glibc is synthesized by this workflow rather than
-# downloaded, so it only exists in the repository.
+# downloaded, so it only exists in the repository. The repository keeps its
+# archives one level down, in artifacts/, which is why both levels are searched.
 RepackOne() {
 	local Pattern="$1" Source=""
 	local Directory
-	for Directory in "$RepositoryDirectory" "$PackagesDirectory"; do
+	for Directory in "$RepositoryDirectory" "$RepositoryDirectory/artifacts" \
+		"$PackagesDirectory" "$PackagesDirectory/artifacts"; do
 		[ -d "$Directory" ] || continue
 		Source="$(find "$Directory" -maxdepth 1 -name "$Pattern" -print -quit 2>/dev/null)"
 		[ -n "$Source" ] && break
