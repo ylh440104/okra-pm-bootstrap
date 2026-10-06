@@ -46,9 +46,9 @@ env:
 jobs:
   scheme-b:
     runs-on: ubuntu-24.04
-    # The native rebuild is the long part: gcc alone is tens of minutes at four
-    # jobs, on top of everything the cross build already did.
-    timeout-minutes: 420
+    # The native rebuilds are the long part: binutils and gcc once, then libxcrypt
+# and glibc again, at four jobs each, on top of everything the cross build did.
+    timeout-minutes: 600
     steps:
       - uses: actions/checkout@v4
         with:
@@ -114,6 +114,18 @@ jobs:
           #
           # It takes a while: gcc alone is tens of minutes.
           sudo -E ./scripts/rebuild-native.sh "$RUNNER_TEMP/okra-rootfs"
+          sudo chown -R "$(id -u):$(id -g)" "$RUNNER_TEMP/okra-rootfs"
+
+      - name: Rebuild the C library inside the userland
+        env:
+          OKRA_JOBS: '4'
+        run: |
+          set -euo pipefail
+          # glibc is the last thing that makes the userland depend on the cross
+          # toolchain: every binary links against it. It is rebuilt with the
+          # compiler the userland built, and libxcrypt comes first because perl
+          # needs it and glibc's build calls perl.
+          sudo -E ./scripts/rebuild-libc.sh "$RUNNER_TEMP/okra-rootfs"
           sudo chown -R "$(id -u):$(id -g)" "$RUNNER_TEMP/okra-rootfs"
 
       - name: Compile the package manager inside the userland
