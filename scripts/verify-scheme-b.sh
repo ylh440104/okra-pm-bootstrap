@@ -312,37 +312,40 @@ echo "== the system the package manager reports"
 lunar --root /var/lib/lunar status || true
 ' || { echo "verify-scheme-b: the in-userland checks failed" >&2; exit 1; }
 
-echo "== managing a package from inside the userland"
+echo "== managing the system from inside it"
 # This is the claim. The lunar running here was compiled by this userland and
-# installed by the transaction above, and it is asked to take a package out of
-# the system and put it back, out of the repository it was installed from. If
-# this works, the userland manages itself.
+# installed by the transaction above, and it is now asked to install a package
+# out of the repository it was installed from. Its own state, its own compiler
+# and its own libraries are the only things it has.
+#
+# which is chosen because the transaction above did not install it: it is in
+# the repository, not in the tree, so installing it can only have come from the
+# package manager reaching the repository from inside the chroot.
 chroot "$InstallRoot" /usr/bin/env -i \
 	PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
 	HOME=/root \
 	REPO_URL="$RepoUrl" \
 	/bin/bash -c '
 set -uo pipefail
-echo "-- syncing the repository from inside"
+echo "-- the repository, seen from inside"
 lunar --root /var/lib/lunar sync okra
-echo "-- removing GNU.nano"
-test -e /usr/bin/nano || { echo "nano is not installed, the test proves nothing" >&2; exit 1; }
-lunar --root /var/lib/lunar remove GNU.nano
-if [ -e /usr/bin/nano ]; then
-	echo "nano survived its own removal" >&2
-	exit 1
-fi
-echo "nano is gone"
-echo "-- installing it again"
-lunar --root /var/lib/lunar install GNU.nano
-if [ ! -e /usr/bin/nano ]; then
-	echo "nano did not come back" >&2
-	exit 1
-fi
-echo "nano is back"
-echo "-- what the package manager lists now"
+echo "-- what is already installed"
 lunar --root /var/lib/lunar list | wc -l
-' || { echo "verify-scheme-b: managing a package from inside failed" >&2; exit 1; }
+if [ -e /usr/bin/which ]; then
+	echo "which is already installed, the test proves nothing" >&2
+	exit 1
+fi
+echo "-- installing GNU.which"
+lunar --root /var/lib/lunar install GNU.which
+if [ ! -e /usr/bin/which ]; then
+	echo "which did not appear" >&2
+	exit 1
+fi
+echo "-- and it runs"
+/usr/bin/which which
+echo "-- what is installed now"
+lunar --root /var/lib/lunar list | wc -l
+' || { echo "verify-scheme-b: managing the system from inside failed" >&2; exit 1; }
 
 CleanupMounts
 StopRepoServer

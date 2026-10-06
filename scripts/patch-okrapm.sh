@@ -68,6 +68,13 @@ Patch "opsis/src/engine.cpp" 2 \
 	'fs::path Rel = fs::relative(It->path(), From, Error);' \
 	'fs::path Rel = It->path().lexically_relative(From);' || exit 1
 
+# Removal is deliberately not patched. It drops the package from the database
+# and hands the file deletion to the package's own REMOVE script; none of the
+# bootstrapped packages carry one, so removing leaves the files behind. Fixing
+# that properly means recording the installed file list in the system database,
+# which is a change to the store's format rather than a call site. It is listed
+# as a known gap in the README instead of being papered over here.
+
 # Nothing may be left behind: a missed call site is the same bug in a different
 # corner, and it would be found much later.
 Left="$(grep -rn 'fs::relative' "$Checkout/lib" "$Checkout/src" "$Checkout/opsis" 2>/dev/null || true)"

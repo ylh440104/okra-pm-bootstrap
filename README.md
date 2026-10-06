@@ -55,15 +55,19 @@ scripts/verify-scheme-b.sh       用 lunar 装整个系统并验证
 
 ## 已知缺口
 
+**安装器修了一个上游 bug。** OkraPM 用 `fs::relative` 算 payload 条目的目标路径，而它会解析符号链接。所以任何带 `libfoo.so.6 -> libfoo.so.6.5` 这种链的包，装完后实体文件被替换成指向自己的链接，另外两个名字根本没建出来。bash 因此找不到 `libtinfo.so.6`。`scripts/patch-okrapm.sh` 把三处调用改成 `lexically_relative`，模式找不到就报错，避免上游修好后这个补丁悄悄留在原地。
+
+**卸载不删文件。** lunar 的 remove 只把包从数据库移除，文件删除交给包自己的 `remove.opsis`。这批自举包的 `scripts/` 目录是空的，所以卸载是空操作、但报告成功。正确修法是让 `system.db` 记录已安装文件清单——那是改存储格式，不是改调用点，所以这里没做，只记录在案。
+
 这些是脚本**明确补上并打印出来**的，不是藏起来的：
 
 | 缺什么 | 为什么 | 现在怎么处理 |
 |---|---|---|
 | `base-files` 类包 | 没人提供 `/bin/sh`、`/etc/passwd` | `verify-scheme-b.sh` 建完并报告 |
 | `cc`、`c++`、`pkg-config` 名字 | 在宿主上属于发行版，不属于任何软件包 | `assemble-userland.sh` 建符号链接 |
-| `libgcc_s.so.1` 在 `/usr/lib64` | loader 只搜 `libc.so.6` 所在目录 | 建链接到 `/usr/lib` |
+| `ld.so.cache` | 需要跑 `ldconfig`，它属于 glibc 包 | 两棵树都写 `ld.so.conf` 并跑 `ldconfig` |
 
-要真正干净，这些应该各自成为包（`app.base-files`、`app.toolchain-aliases`），让仓库里没有"脚本放进去的文件"。
+要真正干净，前两项应该各自成为包（`app.base-files`、`app.toolchain-aliases`），让仓库里没有"脚本放进去的文件"。
 
 ## 种子
 
