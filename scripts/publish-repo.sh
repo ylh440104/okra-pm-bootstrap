@@ -59,12 +59,17 @@ AddGlibc() {
 }
 
 # AddOkrapm() - copy the package manager archive in under its Lunar name.
+#
+# The sidecar checksum comes with it. Renaming happens later, and a checksum
+# left behind under the old name is unreachable rather than absent, which is
+# exactly the kind of gap that is noticed months later.
 # Return: 0 when at least one candidate was added.
 AddOkrapm() {
 	local Added=0 Candidate
 	for Candidate in ${OKRA_ARTIFACTS:-} "$RepositoryRoot"/vendor/okrapm/*.oaa; do
 		[ -f "$Candidate" ] || continue
 		cp -f "$Candidate" "$OutputDirectory/artifacts/"
+		[ -f "$Candidate.sha256" ] && cp -f "$Candidate.sha256" "$OutputDirectory/artifacts/"
 		echo "== added $Candidate"
 		Added=1
 	done
@@ -204,6 +209,21 @@ if tar -xf "$SampleOpsis" -C "$Extract" 2>/dev/null ||
 	}
 fi
 rm -rf "$Extract"
+
+echo "== every archive has to have its checksum"
+MissingSums=0
+for Archive in "$OutputDirectory/artifacts"/*.oaa; do
+	[ -f "$Archive" ] || continue
+	if [ ! -f "$Archive.sha256" ]; then
+		echo "FAIL $(basename "$Archive") has no checksum beside it" >&2
+		MissingSums=$((MissingSums + 1))
+	fi
+done
+[ "$MissingSums" -eq 0 ] || {
+	echo "publish-repo: $MissingSums archives are missing their checksums" >&2
+	exit 1
+}
+echo "== all $(ls "$OutputDirectory/artifacts"/*.oaa | wc -l) archives have checksums"
 
 echo "== repository contents"
 ls "$OutputDirectory/artifacts" | wc -l
