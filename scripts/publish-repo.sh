@@ -169,10 +169,20 @@ echo "== $PackageCount packages to fetch"
 
 while read -r Name; do
 	[ -n "$Name" ] || continue
+	# The archive and its sidecar checksum are fetched together. Every archive
+	# in this release has one, and the repository has to carry it: the guard
+	# below refuses to finish otherwise, and a checksum that only exists in the
+	# other release is not much use to anyone syncing this one.
 	curl -sSL -m 600 -H "Authorization: token $Token" \
 		-o "$OutputDirectory/artifacts/$Name" \
 		"https://github.com/$SourceRepository/releases/download/$SourceRelease/$Name" || {
 		echo "publish-repo: could not download $Name" >&2
+		exit 1
+	}
+	curl -fsSL -m 120 -H "Authorization: token $Token" \
+		-o "$OutputDirectory/artifacts/$Name.sha256" \
+		"https://github.com/$SourceRepository/releases/download/$SourceRelease/$Name.sha256" || {
+		echo "publish-repo: could not download the checksum for $Name" >&2
 		exit 1
 	}
 done < "$OutputDirectory/download/names.txt"
