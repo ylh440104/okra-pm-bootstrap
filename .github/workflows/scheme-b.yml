@@ -160,6 +160,7 @@ jobs:
           ./scripts/repack-native-toolchain.sh \
             "$RUNNER_TEMP/okra-rootfs" \
             "$RUNNER_TEMP/okra-packages" \
+            ./repo \
             "$RUNNER_TEMP/okra-native"
 
       - name: Build the host lunar for the verification

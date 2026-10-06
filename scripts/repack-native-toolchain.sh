@@ -18,16 +18,17 @@
 # manager and the sample package, and produce one enormous package instead of
 # three that match what they replace.
 #
-# Usage: repack-native-toolchain.sh <rootfs-dir> <packages-dir> <output-dir>
+# Usage: repack-native-toolchain.sh <rootfs-dir> <packages-dir> <repository-dir> <output-dir>
 # Environment:
 #   OKRA_OAATOOLS  holds oaa-build (default <repo root>/vendor/okrapm/oaatools)
 #   OKRA_REPACK_RELEASE  release to record (default 2)
 # Return: 0 when every toolchain package was repacked, 1 otherwise.
 set -uo pipefail
 
-RootfsDirectory="${1:?usage: repack-native-toolchain.sh <rootfs-dir> <packages-dir> <output-dir>}"
-PackagesDirectory="${2:?usage: repack-native-toolchain.sh <rootfs-dir> <packages-dir> <output-dir>}"
-OutputDirectory="${3:?usage: repack-native-toolchain.sh <rootfs-dir> <packages-dir> <output-dir>}"
+RootfsDirectory="${1:?usage: repack-native-toolchain.sh <rootfs-dir> <packages-dir> <repository-dir> <output-dir>}"
+PackagesDirectory="${2:?usage: repack-native-toolchain.sh <rootfs-dir> <packages-dir> <repository-dir> <output-dir>}"
+RepositoryDirectory="${3:?usage: repack-native-toolchain.sh <rootfs-dir> <packages-dir> <repository-dir> <output-dir>}"
+OutputDirectory="${4:?usage: repack-native-toolchain.sh <rootfs-dir> <packages-dir> <repository-dir> <output-dir>}"
 ScriptDirectory="$(cd "$(dirname "$0")" && pwd)"
 RepositoryRoot="${OKRA_REPO_ROOT:-$(cd "$ScriptDirectory/.." && pwd)}"
 OaaTools="${OKRA_OAATOOLS:-$RepositoryRoot/vendor/okrapm/oaatools}"
@@ -47,11 +48,20 @@ mkdir -p "$WorkRoot" "$OutputDirectory"
 #
 # @Pattern: glob for the archive being replaced, such as 'gcc-*-1.x86_64*.oaa'.
 # Return: 0 when a new archive and its checksum were written, 1 otherwise.
+#
+# The archive being replaced is looked for in the repository as well as in the
+# download directory: app.glibc is synthesized by this workflow rather than
+# downloaded, so it only exists in the repository.
 RepackOne() {
-	local Pattern="$1" Source
-	Source="$(find "$PackagesDirectory" -maxdepth 1 -name "$Pattern" -print -quit 2>/dev/null)"
+	local Pattern="$1" Source=""
+	local Directory
+	for Directory in "$RepositoryDirectory" "$PackagesDirectory"; do
+		[ -d "$Directory" ] || continue
+		Source="$(find "$Directory" -maxdepth 1 -name "$Pattern" -print -quit 2>/dev/null)"
+		[ -n "$Source" ] && break
+	done
 	if [ -z "$Source" ]; then
-		echo "repack: no archive matching $Pattern in $PackagesDirectory" >&2
+		echo "repack: no archive matching $Pattern in $RepositoryDirectory or $PackagesDirectory" >&2
 		return 1
 	fi
 
@@ -195,6 +205,21 @@ PY
 RepackOne 'binutils-*-1.x86_64*.oaa' || exit 1
 RepackOne 'gcc-*-1.x86_64*.oaa' || exit 1
 RepackOne 'glibc-*-1.x86_64*.oaa' || exit 1
+
+# The repacked archives replace the ones the repository was carrying, so the
+# repository describes what the system actually runs on, and the index is
+# rebuilt because the file lists have changed. This is done before the
+# verification so the tree that is installed and inspected is the native one.
+echo "== putting the repacked toolchain into the repository"
+for Archive in "$OutputDirectory"/*.oaa; do
+	[ -f "$Archive" ] || continue
+	Name="$(basename "$Archive")"
+	rm -f "$RepositoryDirectory/artifacts/$Name" "$RepositoryDirectory/artifacts/$Name.sha256"
+	cp -f "$Archive" "$RepositoryDirectory/artifacts/$Name"
+	cp -f "$Archive.sha256" "$RepositoryDirectory/artifacts/$Name.sha256"
+	echo "== replaced $Name"
+done
+bash "$ScriptDirectory/build-index.sh" "$RepositoryDirectory" || exit 1
 
 echo "== the toolchain the system built for itself"
 ls -la "$OutputDirectory"

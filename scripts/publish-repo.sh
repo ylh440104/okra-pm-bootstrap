@@ -240,18 +240,7 @@ ls "$OutputDirectory/artifacts" | wc -l
 ls "$OutputDirectory/artifacts" | head -8
 
 echo "== building the index"
-python3 -c "
-import importlib.util
-from pathlib import Path
-spec = importlib.util.spec_from_file_location('repo_server', '$ScriptDirectory/repo-server.py')
-module = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(module)
-print('== wrote', module.write_index(Path('$OutputDirectory')))
-"
-
-IndexedCount="$(grep -c '^name:' "$OutputDirectory/index.yaml" || true)"
-echo "== the index lists $IndexedCount packages"
-[ "$IndexedCount" -gt 50 ] || { echo "publish-repo: the index is too small" >&2; exit 1; }
+bash "$ScriptDirectory/build-index.sh" "$OutputDirectory" || exit 1
 
 rm -rf "$OutputDirectory/download"
 echo "== done"
