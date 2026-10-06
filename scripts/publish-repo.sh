@@ -149,6 +149,34 @@ AddGlibc || exit 1
 AddOkrapm
 RenameToLunarNames
 
+# A package that is in the repository but not in the userland, so the
+# verification has something to install from inside the chroot. Every other
+# package in the index is installed by the first transaction, which would make
+# the install test meaningless.
+echo "== adding a package for the install test"
+SampleOpsis="$(find "$OutputDirectory/artifacts" -name 'Okra.okrapm@*.oaa' -print -quit 2>/dev/null || true)"
+[ -n "$SampleOpsis" ] || { echo "publish-repo: no package manager archive to take opsis from" >&2; exit 1; }
+Extract="$(mktemp -d)"
+if tar -xf "$SampleOpsis" -C "$Extract" 2>/dev/null ||
+	tar --zstd -xf "$SampleOpsis" -C "$Extract" 2>/dev/null; then
+	OpsisBin="$Extract/rootfs/usr/bin/opsis"
+	if [ ! -x "$OpsisBin" ]; then
+		echo "publish-repo: the package manager archive has no opsis" >&2
+		rm -rf "$Extract"
+		exit 1
+	fi
+	# opsis comes out of the archive the userland built, so the sample is packed
+	# by the same packer as everything else.
+	OKRA_TOOLCHAIN="$ToolchainRoot" \
+		bash "$ScriptDirectory/make-sample-package.sh" \
+		"$OpsisBin" "$OutputDirectory/artifacts" || {
+		echo "publish-repo: the sample package could not be built" >&2
+		rm -rf "$Extract"
+		exit 1
+	}
+fi
+rm -rf "$Extract"
+
 echo "== repository contents"
 ls "$OutputDirectory/artifacts" | wc -l
 ls "$OutputDirectory/artifacts" | head -8

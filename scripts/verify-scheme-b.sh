@@ -331,18 +331,18 @@ echo "-- the repository, seen from inside"
 lunar --root /var/lib/lunar sync okra
 echo "-- what is already installed"
 lunar --root /var/lib/lunar list | wc -l
-if [ -e /usr/bin/which ]; then
-	echo "which is already installed, the test proves nothing" >&2
+if [ -e /usr/bin/hello ]; then
+	echo "hello is already installed, the test proves nothing" >&2
 	exit 1
 fi
-echo "-- installing GNU.which"
-lunar --root /var/lib/lunar install GNU.which
-if [ ! -e /usr/bin/which ]; then
-	echo "which did not appear" >&2
+echo "-- installing Okra.hello"
+lunar --root /var/lib/lunar install Okra.hello
+if [ ! -e /usr/bin/hello ]; then
+	echo "hello did not appear" >&2
 	exit 1
 fi
 echo "-- and it runs"
-/usr/bin/which which
+/usr/bin/hello
 echo "-- what is installed now"
 lunar --root /var/lib/lunar list | wc -l
 ' || { echo "verify-scheme-b: managing the system from inside failed" >&2; exit 1; }
