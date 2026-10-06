@@ -201,17 +201,24 @@ jobs:
           Tag="okra-repo"
           gh release view "$Tag" >/dev/null 2>&1 || gh release create "$Tag" \
             --title "Okra software source" \
-            --notes "The OkraPM software source produced by scheme B: the bootstrapped x86_64 packages in the layout lunar syncs, plus the package manager compiled by the userland itself."
-          # The repository this workflow produces is the index plus the archives
-          # the userland did not have: the package manager, the sample, and the
-          # two libraries the tree turned out to be missing. The other 73
-          # packages are already published in okra-userland and are not copied
-          # again.
+            --notes "The OkraPM software source produced by scheme B: the bootstrapped x86_64 packages in the layout lunar syncs, plus the package manager compiled by the userland itself.
+
+The index here lists every package in the repository. This release carries the ones this workflow produced - the package manager, the sample, the two libraries the tree was missing, and the toolchain the system compiled for itself. The seventy bootstrapped packages the index also lists live in okra-userland, which is where they were published; they are not copied here because they do not change between runs.
+
+Running the workflow reproduces the whole repository, index and archives together."
+          # The archives this workflow produced: the package manager, the sample,
+          # the two libraries the tree was missing, and the toolchain the system
+          # compiled for itself. The seventy bootstrapped packages are already
+          # published in okra-userland and are not copied again.
           mapfile -t Files < <(find repo -maxdepth 2 -type f \
-            \( -name 'index.yaml' -o -name 'Okra.okrapm@*.oaa' -o -name 'Okra.okrapm@*.oaa.sha256' \
+            \( -name 'index.yaml' \
+               -o -name 'Okra.okrapm@*.oaa' -o -name 'Okra.okrapm@*.oaa.sha256' \
                -o -name 'Okra.hello@*.oaa' -o -name 'Okra.hello@*.oaa.sha256' \
                -o -name 'app.lz4@*.oaa' -o -name 'app.lz4@*.oaa.sha256' \
-               -o -name 'app.libxcrypt@*.oaa' -o -name 'app.libxcrypt@*.oaa.sha256' \) | sort)
+               -o -name 'app.libxcrypt@*.oaa' -o -name 'app.libxcrypt@*.oaa.sha256' \
+               -o -name 'app.glibc@*.oaa' -o -name 'app.glibc@*.oaa.sha256' \
+               -o -name 'GNU.gcc@*.oaa' -o -name 'GNU.gcc@*.oaa.sha256' \
+               -o -name 'GNU.binutils@*.oaa' -o -name 'GNU.binutils@*.oaa.sha256' \) | sort)
           echo "uploading ${#Files[@]} files"
           printf '%s\n' "${Files[@]}"
           [ "${#Files[@]}" -ge 3 ] || { echo "nothing to publish" >&2; exit 1; }
