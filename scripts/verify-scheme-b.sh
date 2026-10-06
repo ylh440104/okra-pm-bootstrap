@@ -363,7 +363,7 @@ echo "-- and tar has to be able to read a package with it"
 # the artifacts land is the package manager's business, so it is asked for one
 # and then found on disk.
 lunar --root /var/lib/lunar download Okra.hello >/dev/null || exit 1
-Archive="$(find /var/lib/lunar -name 'Okra.hello@*.oaa' -print -quit 2>/dev/null)"
+Archive="$(find /var/lib/lunar -name "Okra.hello@*.oaa" -print -quit 2>/dev/null)"
 [ -n "$Archive" ] || { echo "the downloaded archive is not on disk" >&2; exit 1; }
 mkdir -p /tmp/readback
 tar -xf "$Archive" -C /tmp/readback || exit 1
