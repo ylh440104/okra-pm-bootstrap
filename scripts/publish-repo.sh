@@ -114,6 +114,27 @@ RenameToLunarNames() {
 	return 0
 }
 
+# AddMissingPackages() - build the two libraries the userland turned out not to
+# have.
+#
+# Every binary in the tree was checked for the shared libraries it asks for and
+# exactly two were absent: liblz4.so.1, which zstd loads, and libcrypt.so.1,
+# which the login tools load. zstd matters most here: tar calls it to read a
+# zstd archive, so without it nothing in this repository can be unpacked from
+# inside the system.
+#
+# They are built with the same cross toolchain as everything else and packed as
+# ordinary packages, so the package manager installs them like anything else.
+# Return: 0 when they are in the repository.
+AddMissingPackages() {
+	echo "== building the libraries the userland is missing"
+	OKRA_TOOLCHAIN="$ToolchainRoot" \
+		OKRA_OUTPUT="$OutputDirectory/artifacts" \
+		OKRA_OAATOOLS="$RepositoryRoot/vendor/okrapm/oaatools" \
+		bash "$ScriptDirectory/make-missing-packages.sh" "$OutputDirectory/artifacts" || return 1
+	return 0
+}
+
 echo "== collecting the bootstrapped packages"
 mkdir -p "$OutputDirectory/download"
 Listing="$(curl -sSL -m 120 \
@@ -145,6 +166,7 @@ while read -r Name; do
 	}
 done < "$OutputDirectory/download/names.txt"
 
+AddMissingPackages || exit 1
 AddGlibc || exit 1
 AddOkrapm
 RenameToLunarNames

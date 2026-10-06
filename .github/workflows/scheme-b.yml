@@ -187,12 +187,16 @@ jobs:
           gh release view "$Tag" >/dev/null 2>&1 || gh release create "$Tag" \
             --title "Okra software source" \
             --notes "The OkraPM software source produced by scheme B: the bootstrapped x86_64 packages in the layout lunar syncs, plus the package manager compiled by the userland itself."
-          # The repository this workflow produces is the index plus the two
-          # archives the userland built itself. The other 73 packages are already
-          # published in okra-userland and are not copied again.
+          # The repository this workflow produces is the index plus the archives
+          # the userland did not have: the package manager, the sample, and the
+          # two libraries the tree turned out to be missing. The other 73
+          # packages are already published in okra-userland and are not copied
+          # again.
           mapfile -t Files < <(find repo -maxdepth 2 -type f \
             \( -name 'index.yaml' -o -name 'Okra.okrapm@*.oaa' -o -name 'Okra.okrapm@*.oaa.sha256' \
-               -o -name 'Okra.hello@*.oaa' -o -name 'Okra.hello@*.oaa.sha256' \) | sort)
+               -o -name 'Okra.hello@*.oaa' -o -name 'Okra.hello@*.oaa.sha256' \
+               -o -name 'app.lz4@*.oaa' -o -name 'app.lz4@*.oaa.sha256' \
+               -o -name 'app.libxcrypt@*.oaa' -o -name 'app.libxcrypt@*.oaa.sha256' \) | sort)
           echo "uploading ${#Files[@]} files"
           printf '%s\n' "${Files[@]}"
           [ "${#Files[@]}" -ge 3 ] || { echo "nothing to publish" >&2; exit 1; }

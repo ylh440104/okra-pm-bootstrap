@@ -13,7 +13,7 @@
 #   4. chroots into the result and runs lunar there - the package manager
 #      running on the packages it installed
 #   5. installs a package from inside that chroot, with the lunar that lives
-#      there
+#      there, which is the claim the whole scheme rests on
 #
 # Step 5 is the one that matters. If it works, the userland is self managing:
 # the tool, the compiler that built it and the libraries under it all come from
@@ -341,25 +341,38 @@ echo "-- the package manager the userland built"
 lunar --root /var/lib/lunar help | head -1
 ' || { echo "verify-scheme-b: the in-userland checks failed" >&2; exit 1; }
 
-echo "== installing a further package from inside (reported, not asserted)"
-InChrootInstall=""
+echo "== installing a further package from inside"
+# This is the claim scheme B rests on: the package manager, running inside the
+# system it installed, installs another package from the same repository.
+#
+# It used to fail here, and the reason was worth keeping: tar calls zstd to read
+# a zstd archive, zstd links against liblz4.so.1, and the userland had no lz4
+# because no package provided it. The first transaction never noticed, because
+# that one runs on the host and used the host's zstd. Both libraries the tree
+# turned out to be missing are now packages in this repository, so the install
+# is asserted rather than reported.
 chroot "$InstallRoot" /usr/bin/env -i \
 	PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
 	HOME=/root \
 	/bin/bash -c '
-if [ -e /usr/bin/hello ]; then
-	echo "hello is already installed, the test proves nothing" >&2
-	exit 2
-fi
-lunar --root /var/lib/lunar install Okra.hello && exit 0
-exit 1
-'
-case "$?" in
-	0) InChrootInstall="the package manager installed a further package from inside the system" ;;
-	2) InChrootInstall="the sample was already installed, so nothing was proved" ;;
-	*) InChrootInstall="BLOCKED: the in-chroot install of a new package fails inside OkraPM's own extraction path" ;;
-esac
-echo "== in-chroot install: $InChrootInstall"
+set -uo pipefail
+echo "-- zstd has to work, because tar calls it for every archive"
+zstd --version || exit 1
+echo "-- and tar has to be able to read a package with it"
+mkdir -p /tmp/readback
+tar -xf /var/lib/lunar/repos/okra/artifacts/Okra.hello@1.0.0.oaa -C /tmp/readback || exit 1
+[ -f /tmp/readback/meta.yaml ] || exit 1
+echo "ok   the package read back"
+echo "-- installing it"
+lunar --root /var/lib/lunar install Okra.hello || exit 1
+[ -x /usr/bin/hello ] || { echo "hello did not appear" >&2; exit 1; }
+/usr/bin/hello || exit 1
+' || {
+	StopRepoServer
+	echo "verify-scheme-b: the package manager could not install a package from inside the system" >&2
+	exit 1
+}
+echo "== the package manager installed and ran a package from inside the system"
 
 CleanupMounts
 StopRepoServer
