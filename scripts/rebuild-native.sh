@@ -54,6 +54,23 @@ Fetch() {
 	return 0
 }
 
+# Fingerprint() - a string that changes when the compiler binary changes.
+# @Program: path under the rootfs, such as usr/bin/gcc.
+# Return: 0. Prints the configuration line and the compiler's own build id.
+#
+# The first line of --version is just the version number, which is the same for
+# the cross compiler and the one the system builds, so it cannot tell them
+# apart. -v prints the configure line and a sha256 of the compiler's
+# configuration, and those do differ between two builds.
+Fingerprint() {
+	local Program="$1"
+	"$RootfsDirectory/lib64/ld-linux-x86-64.so.2" \
+		--library-path "$RootfsDirectory/usr/lib64:$RootfsDirectory/usr/lib:$RootfsDirectory/lib64:$RootfsDirectory/lib" \
+		"$RootfsDirectory/$Program" -v 2>&1 |
+		grep -E 'Configured with|gcc version|sha256|build id' |
+		tr -d '\r' | sort || true
+}
+
 # ShowToolchain() - print the version of the compiler or linker in the tree.
 # @Program: path under the rootfs, such as usr/bin/gcc.
 # Return: 0. Prints nothing useful if the program will not run.
@@ -78,14 +95,14 @@ Fetch "$Mirror/gcc/gcc-$GccVersion/gcc-$GccVersion.tar.xz" "$Sources/gcc.tar.xz"
 }
 ls -la "$Sources"
 
-# The fingerprint of the compiler before the rebuild. gcc prints a sha256 of its
-# own configuration as the last line of --version, and that changes when the
-# binary changes, so comparing it is what shows the rebuild actually replaced
-# something rather than the script merely exiting zero.
+# The fingerprint of the compiler before the rebuild. It has to be something
+# that differs between the cross compiler and the one built in the userland, or
+# the comparison below proves nothing.
 echo "== the compiler that is about to be replaced"
 ShowToolchain usr/bin/gcc
-Before="$(ShowToolchain usr/bin/gcc)"
+Before="$(Fingerprint usr/bin/gcc)"
 [ -n "$Before" ] || { echo "rebuild-native: the userland gcc does not run" >&2; exit 1; }
+echo "$Before" | sed 's/^/   /'
 
 echo "== entering the userland"
 # The heredoc is quoted, so everything inside runs as written in the userland.
@@ -215,8 +232,9 @@ trap - EXIT
 
 echo "== the toolchain in the userland is now the one it built"
 ShowToolchain usr/bin/gcc
-After="$(ShowToolchain usr/bin/gcc)"
+After="$(Fingerprint usr/bin/gcc)"
 [ -n "$After" ] || { echo "rebuild-native: the rebuilt gcc does not run" >&2; exit 1; }
+echo "$After" | sed 's/^/   /'
 
 # The comparison is the point: without it a script that quietly did nothing
 # would look exactly like one that worked, which is what happened once already.
@@ -227,8 +245,10 @@ if [ "$Before" = "$After" ]; then
 	exit 1
 fi
 echo "== and it is not the one that went in"
-echo "   before: $Before"
-echo "   after:  $After"
+echo "   before:"
+echo "$Before" | sed 's/^/     /'
+echo "   after:"
+echo "$After" | sed 's/^/     /'
 
 echo "== what is still cross built"
 echo "   glibc, the C library: replacing it in place needs a two phase install"
