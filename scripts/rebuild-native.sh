@@ -108,7 +108,11 @@ echo "== building binutils $BinutilsVersion, natively"
 rm -rf binutils-build
 mkdir binutils-build
 cd binutils-build || exit 1
-../binutils-src/configure --prefix=/usr --disable-nls --disable-werror || exit 1
+# gprofng is the bundled profiler, and its libcollector does not compile under
+# gcc 16: iolib.c trips over a _Generic that the newer compiler rejects. It is
+# not part of a toolchain - as, ld, ar and the rest are what a build needs - so
+# it is switched off rather than patched.
+../binutils-src/configure --prefix=/usr --disable-nls --disable-werror --disable-gprofng || exit 1
 make -j$Jobs || exit 1
 make install || exit 1
 cd /usr/src/native || exit 1
