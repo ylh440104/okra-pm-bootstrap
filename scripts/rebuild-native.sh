@@ -119,16 +119,34 @@ cd /usr/src/native || exit 1
 echo "== the linker now in place"
 /usr/bin/ld --version | head -1
 
-echo "== fetching the gcc prerequisites"
-cd /usr/src/native/gcc-src || exit 1
-./contrib/download_prerequisites || exit 1
-cd /usr/src/native || exit 1
-
 echo "== building gcc $GccVersion, natively"
+# download_prerequisites is not run: it fetches gmp, mpfr and mpc from
+# gcc.gnu.org with wget, and the userland's wget was built without HTTPS. The
+# three libraries are already in this system as packages - headers in
+# /usr/include, libraries in /usr/lib - so the build is pointed at them
+# instead. That is also the more honest arrangement: a system that can only
+# rebuild itself by downloading the same libraries again is not self hosting.
+for Header in gmp.h mpfr.h mpc.h; do
+	[ -f "/usr/include/$Header" ] || {
+		echo "missing /usr/include/$Header, which gcc needs to build" >&2
+		exit 1
+	}
+done
+echo "== gmp, mpfr and mpc are in the system"
 rm -rf gcc-build
 mkdir gcc-build
 cd gcc-build || exit 1
-../gcc-src/configure --prefix=/usr --enable-languages=c,c++ --disable-multilib --disable-nls || exit 1
+# --disable-bootstrap builds gcc once with the gcc that is already here, rather
+# than three times over to check the output is stable. One pass is what shows
+# the system can compile its own compiler; the three pass check is a separate
+# question about reproducibility and would triple the time.
+../gcc-src/configure \
+	--prefix=/usr \
+	--enable-languages=c,c++ \
+	--disable-bootstrap \
+	--disable-multilib \
+	--disable-nls \
+	--with-gmp=/usr --with-mpfr=/usr --with-mpc=/usr || exit 1
 make -j$Jobs || exit 1
 make install || exit 1
 cd /usr/src/native || exit 1
