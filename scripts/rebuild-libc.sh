@@ -101,9 +101,45 @@ gcc --version | head -1
 ld --version | head -1
 
 echo "== building libxcrypt ${OKRA_LIBCRYPT_VERSION}, natively"
-# perl links against libcrypt and glibc's build calls perl, so this has to exist
-# before the C library can be rebuilt. The obsolete glibc API is enabled so the
-# soname everything expects, libcrypt.so.1, is the one that gets installed.
+# perl links against libcrypt.so.1 and libxcrypt's configure calls perl, so the
+# library cannot be built until the tool that builds it can run. The only crypt
+# symbol libperl imports is crypt_r at version XCRYPT_2.0, so a stub exporting
+# exactly that lets perl start. The real library replaces it below.
+InstallCryptStub() {
+	cat > /usr/src/native/crypt_stub.c <<'STUB'
+struct crypt_data;
+char *crypt_r(const char *key, const char *salt, struct crypt_data *data)
+{
+	(void)key;
+	(void)salt;
+	(void)data;
+	return 0;
+}
+STUB
+	cat > /usr/src/native/crypt_stub.map <<'MAP'
+XCRYPT_2.0 {
+	global:
+		crypt_r;
+	local:
+		*;
+};
+MAP
+	gcc -shared -fPIC -Wl,-soname,libcrypt.so.1 \
+		-Wl,--version-script=/usr/src/native/crypt_stub.map \
+		-o /usr/lib/libcrypt.so.1 /usr/src/native/crypt_stub.c || return 1
+	ldconfig 2>/dev/null || true
+	echo "== a libcrypt stub is in place so perl can run"
+	return 0
+}
+
+if ! perl -e 'exit 0' >/dev/null 2>&1; then
+	InstallCryptStub || { echo "the libcrypt stub could not be built" >&2; exit 1; }
+fi
+perl -e 'print "   perl is working\n"' || {
+	echo "perl still cannot run" >&2
+	exit 1
+}
+
 rm -rf libxcrypt-src libxcrypt-build
 mkdir libxcrypt-src libxcrypt-build
 tar -xf libxcrypt.tar.xz -C libxcrypt-src --strip-components=1 || exit 1
@@ -111,20 +147,19 @@ cd libxcrypt-build || exit 1
 ../libxcrypt-src/configure \
 	--prefix=/usr \
 	--disable-static \
+	--disable-werror \
 	--enable-hashes=strong,glibc \
 	--enable-obsolete-api=glibc || exit 1
 make || exit 1
+# The stub occupies the name the install wants, so it goes first. The real
+# library then provides libcrypt.so.1 with the XCRYPT_2.0 version perl needs.
+rm -f /usr/lib/libcrypt.so.1
 make install || exit 1
 ldconfig 2>/dev/null || true
 cd /usr/src/native || exit 1
 echo "== libcrypt is in place"
-ls -la /usr/lib/libcrypt.so.1 2>/dev/null || echo "   libcrypt.so.1 is missing" >&2
-
-echo "== perl has to run, because glibc's build calls it"
-perl -e 'print "   perl is working\n"' || {
-	echo "perl still cannot run" >&2
-	exit 1
-}
+ls -la /usr/lib/libcrypt.so* 2>/dev/null || true
+perl -e 'print "   perl is still working, on the real library\n"' || exit 1
 
 echo "== building glibc ${OKRA_GLIBC_VERSION}, natively"
 # The same options the cross toolchain used, minus the cross specific ones. The
