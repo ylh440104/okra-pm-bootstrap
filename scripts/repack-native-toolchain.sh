@@ -195,6 +195,15 @@ PY
 	} > "$Stage/meta.yaml"
 
 	local ArchiveName="$Namespace.$Name@$Version.oaa"
+	# The name has to be the one the resolver asks for, which is the normalised
+	# version rather than the one written in the meta.yaml: 2.44 becomes 2.44.0
+	# and 16.2 becomes 16.2.0. Without this the repacked archive lands beside the
+	# cross built one under a different name, and the install would fetch the
+	# cross built one.
+	local Normalised
+	if Normalised="$(LunarVersion "$Version")"; then
+		ArchiveName="$Namespace.$Name@$Normalised.oaa"
+	fi
 	"$OaaTools/oaa-build" "$Stage" -o "$OutputDirectory/$ArchiveName" || return 1
 	[ -f "$OutputDirectory/$ArchiveName" ] || return 1
 	[ -f "$OutputDirectory/$ArchiveName.sha256" ] || return 1
@@ -204,7 +213,11 @@ PY
 
 RepackOne 'binutils-*-1.x86_64*.oaa' || exit 1
 RepackOne 'gcc-*-1.x86_64*.oaa' || exit 1
-RepackOne 'glibc-*-1.x86_64*.oaa' || exit 1
+# glibc is named differently in each place: the synthesized archive is called
+# glibc-<version>-1.x86_64.oaa, and the rename in publish-repo.sh gives it the
+# name the resolver asks for. Both are accepted so this does not depend on which
+# side of that step the repository is read from.
+RepackOne 'app.glibc@*.oaa' || RepackOne 'glibc-*-1.x86_64*.oaa' || exit 1
 
 # The repacked archives replace the ones the repository was carrying, so the
 # repository describes what the system actually runs on, and the index is
