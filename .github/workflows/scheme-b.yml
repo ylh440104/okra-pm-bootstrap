@@ -159,9 +159,14 @@ jobs:
           gh release view "$Tag" >/dev/null 2>&1 || gh release create "$Tag" \
             --title "Okra software source" \
             --notes "The OkraPM software source produced by scheme B: the bootstrapped x86_64 packages in the layout lunar syncs, plus the package manager compiled by the userland itself."
-          gh release upload "$Tag" \
-            "repo/index.yaml" \
-            "repo/artifacts/Okra.okrapm.oaa" \
-            "repo/artifacts/Okra.okrapm.oaa.sha256" \
-            --clobber
+          # The repository this workflow produces is the index plus the two
+          # archives the userland built itself. The other 73 packages are already
+          # published in okra-userland and are not copied again.
+          mapfile -t Files < <(find repo -maxdepth 2 -type f \
+            \( -name 'index.yaml' -o -name 'Okra.okrapm@*.oaa' -o -name 'Okra.okrapm@*.oaa.sha256' \
+               -o -name 'Okra.hello@*.oaa' -o -name 'Okra.hello@*.oaa.sha256' \) | sort)
+          echo "uploading ${#Files[@]} files"
+          printf '%s\n' "${Files[@]}"
+          [ "${#Files[@]}" -ge 3 ] || { echo "nothing to publish" >&2; exit 1; }
+          gh release upload "$Tag" "${Files[@]}" --clobber
           gh release view "$Tag" --json assets --jq '.assets | length'
