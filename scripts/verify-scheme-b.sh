@@ -354,8 +354,7 @@ echo "-- probing the archive the way the installer does"
 Probe=/tmp/lunar-probe
 rm -rf "$Probe"
 mkdir -p "$Probe"
-for Candidate in /var/lib/lunar/repos/okra/artifacts/Okra.hello* \
-	/var/lib/lunar/cache/downloads/Okra.hello*; do
+for Candidate in /var/lib/lunar/repos/okra/artifacts/Okra.hello* /var/lib/lunar/cache/downloads/Okra.hello*; do
 	[ -f "$Candidate" ] || continue
 	echo "   $Candidate is $(stat -c %s "$Candidate") bytes"
 	rm -rf "$Probe"
