@@ -8,16 +8,19 @@ OkraPM 驱动整条自举链路的验证仓库（x86_64）。
 
 自举出来的每一个文件都由一次安装事务写进去，包管理器自己也是这些包中的一个。
 
-链路分六步，每步都能独立验证：
+链路分七步，每步都能独立验证：
 
 1. 交叉工具链把 70 个自举包组装成一个可 chroot 的用户态
 2. **系统用自己的 gcc 原生重编 binutils 和 gcc**
 3. **系统用自己的 gcc 原生重编 libxcrypt 和 glibc**
 4. OkraPM 用这个用户态里的 g++ 编译自己，再用自己的 opsis 打包
 5. 结果变成一个 Lunar 软件源——lunar 能 sync 的那种，含之前缺失的 `app.glibc`、`app.lz4`、`app.libxcrypt`
-6. 宿主机上的 lunar 把这整套用户态装进一个空目录，一次事务；然后 chroot 进去，用里面的 lunar **再装一个包**
+6. **原生编出来的工具链被打回成包**，替换仓库里的交叉编译版本，索引重建
+7. 宿主机上的 lunar 把这整套用户态装进一个空目录，一次事务；然后 chroot 进去，用里面的 lunar **再装一个包**
 
-第 6 步是方案 B 与方案 A 的分界线：包管理器不是系统建好后补装的，它本来就是仓库里的一个包，由它所属的系统编译出来，再从系统内部管理这个系统。
+第 7 步是方案 B 与方案 A 的分界线：包管理器不是系统建好后补装的，它本来就是仓库里的一个包，由它所属的系统编译出来，再从系统内部管理这个系统。
+
+第 6 步是文档说的完成标志的后半截：用工具链重编自己之后，**把产物重新打包**。少了它，树里跑的是原生工具链，而数据库和仓库记的还是交叉编译的那一份。
 
 ## 为什么之前的链路不够
 
@@ -44,12 +47,14 @@ scripts/fetch-packages.sh          取 70 个自举包（带 sha256 校验）
 scripts/assemble-userland.sh       工具链 sysroot + 包 → rootfs
 scripts/rebuild-native.sh          chroot 内用系统自己的 gcc 重编 binutils + gcc
 scripts/rebuild-libc.sh            chroot 内原生重编 libxcrypt + glibc
+scripts/repack-native-toolchain.sh 把原生工具链打回成包，替换仓库里的交叉版本
 scripts/build-okrapm.sh            在 Okra 用户态里编译 OkraPM
 scripts/make-glibc-package.sh      sysroot 合成 app.glibc 包
 scripts/make-missing-packages.sh   编用户态缺的两个库：app.lz4、app.libxcrypt
 scripts/make-sample-package.sh     编一个用户态里还没有的包，供 chroot 内安装测试
 scripts/patch-okrapm.sh            修 OkraPM 的符号链接处理 bug
 scripts/publish-repo.sh            打包成 Lunar 软件源
+scripts/build-index.sh             由仓库里的归档生成 index.yaml
 scripts/repo-server.py             提供软件源，生成 index.yaml
 scripts/lib-oaa.sh                 从 .oaa 归档里读 meta.yaml
 scripts/verify-scheme-b.sh         用 lunar 装整个系统并验证
@@ -57,23 +62,23 @@ scripts/verify-scheme-b.sh         用 lunar 装整个系统并验证
 
 ## 自举到了哪一步
 
-| 组件 | 谁编的 |
-|---|---|
-| binutils 2.44 | **系统自己**（chroot 内原生） |
-| gcc 16.2.0 | **系统自己**（chroot 内原生） |
-| libxcrypt 4.4.36 | **系统自己**（chroot 内原生） |
-| glibc 2.43 | **系统自己**（chroot 内原生） |
-| 73 个用户态包 | 交叉编译器 |
+| 组件 | 谁编的 | 仓库里是哪一份 |
+|---|---|---|
+| binutils 2.44 | **系统自己**（chroot 内原生） | 原生，35 项 |
+| gcc 16.2.0 | **系统自己**（chroot 内原生） | 原生，885 项 |
+| libxcrypt 4.4.36 | **系统自己**（chroot 内原生） | 原生，19 项 |
+| glibc 2.43 | **系统自己**（chroot 内原生） | 原生，2443 项 |
+| 另外 71 个用户态包 | 交叉编译器 | 交叉编译版本 |
 
-`rebuild-native.sh` 和 `rebuild-libc.sh` 都会打印**前后指纹**（`Configured with:` 行、`libc.so.6` 的 sha256），所以"真的换了编译器/库"是日志里的证据，不是声明。
+`rebuild-native.sh`、`rebuild-libc.sh` 会打印**前后指纹**（`Configured with:` 行、`libc.so.6` 的 sha256），`repack-native-toolchain.sh` 会把原生产物按老包的 `files:` 清单从树里逐条取出——三个包分别取出 35、885、2443 项，**没有一项是清单里有而树里没有的**。所以"工具链是系统自己编的"是日志里的证据，不是声明。
 
 ## 几个关键设计
 
 **app.glibc 是合成出来的，不是手写的。** 交叉工具链把 glibc 直接装进 `okra-sysroot/`，绕过了包系统。`make-glibc-package.sh` 把 70 个包的 `files:` 列表读出来，sysroot 里**没被任何包认领**的部分就是 glibc 基座。这样某个包以后多装一个文件，不会突然变成两个包都声称拥有它。程序目录（`/sbin` 等）不在跳过列表里——`/sbin/ldconfig` 正是因为被跳过才丢过一次。
 
-**归档按 lunar 的解析规则改名。** 自举产物叫 `make-4.4.1-1.x86_64.bootstrapped.oaa`，而 lunar 去仓库找的是 `<namespace>.<name>@<version>.oaa`，也就是 `GNU.make@4.4.1.oaa`。namespace 和 version 从 `meta.yaml` 里读，不从文件名猜——两者不总是一致的。版本还要过一遍 `LunarVersion` 归一化，因为 lunar 的 `Version::parse` 用 `std::stoi`，会把 `1.07.1` 读成 `1.7.1`。
+**归档按 lunar 的解析规则改名。** 自举产物叫 `make-4.4.1-1.x86_64.bootstrapped.oaa`，而 lunar 去仓库找的是 `<namespace>.<name>@<version>.oaa`，也就是 `GNU.make@4.4.1.oaa`。namespace 和 version 从 `meta.yaml` 里读，不从文件名猜——两者不总是一致的。版本还要过一遍 `LunarVersion` 归一化，因为 lunar 的 `Version::parse` 用 `std::stoi`，会把 `1.07.1` 读成 `1.7.1`、把 `2.44` 补成 `2.44.0`。**重打包走的是同一条规则**——否则原生的 `GNU.gcc@16.2.0.oaa` 会和交叉的 `GNU.gcc@16.2.0.oaa` 撞名、或者写成 `16.2` 让解析器去取旧包。
 
-**下载校验。** 每个归档在 release 里都有配套 `.sha256`，`fetch-packages.sh` 下载后比对，不匹配就重试三次。不这么做的话，一次截断的下载要到很久以后的解压才暴露，而那时错误信息指向的是 tar 而不是网络。
+**下载校验，且校验文件跟着归档一起改名。** 每个归档在 release 里都有配套 `.sha256`，`fetch-packages.sh` 和 `publish-repo.sh` 都会比对，不匹配就重试。`publish-repo.sh` 改名时会连 `.sha256` 一起改，最后还有一道守卫：**仓库里任何归档缺校验文件就直接失败**。这道守卫上线时立刻抓到了两个真问题——70 个自举包的校验文件从来没被下载进仓库，以及包管理器自己的校验文件在拷贝时被漏掉。
 
 **app.lz4 和 app.libxcrypt 是审计出来的，不是猜出来的。** 用户态里每个二进制都查了一遍它请求的共享库：1022 个二进制，6 个 soname 未解析，其中 4 个其实在子目录里（误报）。真正缺的是 `liblz4.so.1`（zstd 要它）和 `libcrypt.so.1`（perl/shadow/sudo 要它）。
 
@@ -87,9 +92,11 @@ scripts/verify-scheme-b.sh         用 lunar 装整个系统并验证
 
 **卸载不删文件。** lunar 的 remove 只把包从数据库移除，文件删除交给包自己的 `remove.opsis`。这批自举包的 `scripts/` 目录是空的，所以卸载是空操作、但报告成功。正确修法是让 `system.db` 记录已安装文件清单——那是改存储格式，不是改调用点，所以这里没做。
 
-**73 个用户态包仍是交叉编译的。** 工具链和 C 库已经原生，但这 73 个包还没在系统内部重编一遍。严格自举的完成标志（在系统内 `make` 再编一遍工具链、得到同样的结果）还没做。
+**另外 71 个用户态包仍是交叉编译的。** 工具链、C 库和它们自己的包已经是原生的，但这 71 个还没在系统内部重编一遍。这是剩下最大的一块。
 
 **没做 QEMU 启动。** 产出是 rootfs 目录，不是可引导镜像。
+
+**发布的仓库是子集。** `okra-repo` 的索引列了 75 个包，但只上传这次工作流产出的那些：包管理器、样本、两个补库、以及原生工具链三个包。另外 70 个自举包在 `okra-userland` 里，不随每次运行变化。完整仓库由运行工作流复现——本地验证用的就是完整的 `repo/`，所以验证本身不依赖这一点。
 
 这些是脚本**明确补上并打印出来**的，不是藏起来的：
 
@@ -111,9 +118,9 @@ scripts/verify-scheme-b.sh         用 lunar 装整个系统并验证
 gh workflow run scheme-b.yml -f okrapm_ref=main
 ```
 
-约 55 分钟：交叉工具链取包几分钟，两轮原生重编（binutils+gcc，然后 libxcrypt+glibc）各占大头。
+约 70 分钟：两轮原生重编（binutils+gcc，然后 libxcrypt+glibc）占大头，加上 gcc 的重打包（682 MB）。
 
-产物发到 `okra-repo` release：`index.yaml` + `Okra.okrapm@*.oaa` + `Okra.hello@*.oaa` + `app.lz4@*.oaa` + `app.libxcrypt@*.oaa`。
+产物发到 `okra-repo` release：`index.yaml` + `Okra.okrapm@*.oaa` + `Okra.hello@*.oaa` + `app.lz4@*.oaa` + `app.libxcrypt@*.oaa` + **`GNU.gcc@*.oaa` + `GNU.binutils@*.oaa` + `app.glibc@*.oaa`**（后三个是系统自己编的，各自带 `.sha256`）。
 
 ## 依赖
 
