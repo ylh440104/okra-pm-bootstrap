@@ -106,6 +106,12 @@ RenameToLunarNames() {
 			Skipped=$((Skipped + 1))
 			continue
 		fi
+		# The sidecar checksum has to be renamed with the archive. Left behind
+		# under the old name it is not wrong, just unreachable: anything that
+		# verifies a download looks for it beside the archive it is checking.
+		if [ -f "$Archive.sha256" ]; then
+			mv -f "$Archive.sha256" "$Wanted.sha256"
+		fi
 		mv -f "$Archive" "$Wanted"
 		Renamed=$((Renamed + 1))
 	done
