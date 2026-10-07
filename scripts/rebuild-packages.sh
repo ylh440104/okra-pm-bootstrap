@@ -292,6 +292,40 @@ else
 	echo "!! no ncurses library in the tree, so dialog, gettext and procps cannot link" >&2
 fi
 
+# A library that calls into ncurses needs to record that dependency, or anything
+# that links it fails to start with the symbol reported as undefined. The
+# readline in the tree is an example: it calls tputs and its only recorded
+# dependency is libc, so importing readline in Python fails with
+#
+#     readline failed to import: libreadline.so.8: undefined symbol: tputs
+#
+# and the build then cannot find the readline module it was supposed to install.
+#
+# The dependency is added here rather than by rebuilding readline, because the
+# package that carries it was already built and a rebuild would produce a
+# different archive for no reason other than the link line.
+echo "== recording the ncurses dependency of the libraries that call into it"
+if [ -n "$NcursesLibrary" ]; then
+	for Library in "$RootfsDirectory"/usr/lib/lib*.so.*; do
+		[ -f "$Library" ] || continue
+		case "$Library" in
+			*libncurses*|*libtinfo*|*libcurses*) continue ;;
+		esac
+		# Only libraries with an undefined symbol that ncurses provides are
+		# touched, so this cannot quietly add a dependency to something that
+		# does not need one.
+		Undefined="$(nm -D --undefined-only "$Library" 2>/dev/null |
+			awk '{print $NF}' | grep -xE 'tputs|tgetent|tgetflag|tgetnum|tgetstr|tgoto|tigetflag|tigetnum|tigetstr|setupterm|vidputs|vidattr' | head -1)"
+		[ -n "$Undefined" ] || continue
+		readelf -d "$Library" 2>/dev/null | grep -q 'NEEDED.*libtinfo' && continue
+		if patchelf --add-needed "$NcursesLibrary" "$Library" 2>/dev/null; then
+			echo "== $(basename "$Library") now needs $NcursesLibrary for $Undefined"
+		else
+			echo "!! $(basename "$Library") calls $Undefined but patchelf is not available" >&2
+		fi
+	done
+fi
+
 # The build script's only host assumption is the one function that reaches for a
 # package manager. It is replaced once, here, by appending an override to a copy
 # of the library that the build script is pointed at.
@@ -306,6 +340,32 @@ InstallBuildDependencies() {
 }
 SHIM
 sed -i 's|scripts/lib\.sh|scripts/lib-native.sh|' "$WorkHost/scripts/build-package.sh"
+
+# A caller can add compiler flags, and they are added after the recipe has had
+# its say. Exporting CFLAGS from outside instead would override the library's
+# default and drop whatever a recipe set for itself: gettext turns off
+# -Werror=format-security that way, and a build that ignores it fails on a
+# gnulib warning the recipe had already dealt with.
+python3 - "$WorkHost/scripts/build-package.sh" <<'PATCH'
+import sys
+
+Path = sys.argv[1]
+Text = open(Path).read()
+Anchor = '. "$RecipeFile"\n'
+Addition = Anchor + '''
+# Flags the caller wants added, applied after the recipe has been read so a
+# recipe that turns something off keeps it off.
+if [ -n "${OKRA_EXTRA_CFLAGS:-}" ]; then
+	CFLAGS="${CFLAGS:-$(OkraHardeningFlags)} $OKRA_EXTRA_CFLAGS"
+	export CFLAGS
+	CXXFLAGS="${CXXFLAGS:-$(OkraHardeningFlags)} ${OKRA_EXTRA_CXXFLAGS:-$OKRA_EXTRA_CFLAGS}"
+	export CXXFLAGS
+fi
+'''
+if Anchor not in Text:
+    sys.exit('build-package.sh: the recipe is no longer sourced where expected')
+open(Path, 'w').write(Text.replace(Anchor, Addition, 1))
+PATCH
 
 echo "== entering the userland"
 for Point in dev dev/pts proc sys; do
@@ -359,14 +419,31 @@ ld --version | head -1
 # is one tree that does this. The cross build used an older compiler whose
 # default was C17, which is why the same recipe built then and not now.
 #
-# Pinning it keeps the result defined by the recipe instead of by whichever
-# compiler happens to be current. The hardening flags come from the library so
-# the two builds do not drift apart.
+# Pinning the standard is not enough on its own. Defining _GNU_SOURCE makes
+# glibc define _ISOC23_SOURCE whatever -std says, so the macros come back:
+#
+#     #ifdef _GNU_SOURCE
+#     # undef  _ISOC23_SOURCE
+#     # define _ISOC23_SOURCE  1
+#
+# The one call that breaks is a compound literal with a trailing comma, and the
+# recipe patches that one line rather than forcing a header into every
+# translation unit: a forced header would include glibc's headers before the
+# source gets to define _GNU_SOURCE, and features.h only reads the feature
+# macros once, so the whole build would quietly lose its GNU extensions.
+#
+# The flag is passed as an addition rather than by exporting CFLAGS, because
+# exporting CFLAGS would override the library's own default and silently drop
+# the knobs a recipe sets - gettext turns off -Werror=format-security that way,
+# and the build failed on a gnulib warning that the recipe had already handled.
+#
+# The hardening flags still come from the library so the two builds do not
+# drift apart.
 RepositoryRoot=/usr/src/okra-packages
 . "$RepositoryRoot/scripts/lib-native.sh"
-export CFLAGS="$(OkraHardeningFlags) -std=gnu17"
-export CXXFLAGS="$(OkraHardeningFlags) -std=gnu++17"
-echo "== CFLAGS: $CFLAGS"
+export OKRA_EXTRA_CFLAGS="-std=gnu17"
+echo "== extra CFLAGS: $OKRA_EXTRA_CFLAGS"
+echo "== CFLAGS: $(OkraHardeningFlags) $OKRA_EXTRA_CFLAGS"
 
 mapfile -t Packages < packages.txt
 Built=0
@@ -385,9 +462,10 @@ for Package in "${Packages[@]}"; do
 	Url="$(sed -n 's/^Url=["]*\([^"]*\)["]*$/\1/p' "$Recipe" | head -1)"
 	Name="$(basename "${Url%%\?*}")"
 	# A source that the host had to unpack on the way in is on disk under a
-	# different name: ed ships as .tar.lz and is handed over as .tar. The recipe
-	# is pointed at whatever is actually there.
-	if [ ! -s "src/$Name" ] && [ -s "src/${Name%.lz}" ]; then
+	# different name: ed ships as .tar.lz and the host unpacks it to .tar. The
+	# unpacked one is preferred, because handing the build the .lz would make
+	# tar run lzip, which this system does not have.
+	if [ -s "src/${Name%.lz}" ] && [ "${Name##*.}" = "lz" ]; then
 		Name="${Name%.lz}"
 	fi
 	if [ ! -s "src/$Name" ]; then

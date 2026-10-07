@@ -59,8 +59,10 @@ jobs:
       - name: Install what the build needs
         run: |
           sudo apt-get update
+          # patchelf is used to record the ncurses dependency of a library that
+          # was built without it; patch is used by the toolchain repack.
           sudo apt-get install -y --no-install-recommends \
-            bc bison flex libssl-dev libelf-dev cmake \
+            bc bison flex libssl-dev libelf-dev cmake patchelf patch \
             tar xz-utils zstd gzip bzip2 lzip file rsync python3 wget \
             curl ca-certificates git unzip
 
