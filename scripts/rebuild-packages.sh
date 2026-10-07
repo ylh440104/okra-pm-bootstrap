@@ -39,6 +39,11 @@ Wanted=("$@")
 Jobs="${OKRA_JOBS:-4}"
 OaaToolsInside="${OKRA_OAATOOLS:-/usr/lib/okrapm}"
 
+# Where this script lives. It is not the same directory as the recipes: the
+# recipes come from the package repository, and the scripts that drive the
+# rebuild come from this one.
+ScriptDirectory="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
 [ -d "$RootfsDirectory" ] || { echo "rebuild-packages: no rootfs at $RootfsDirectory" >&2; exit 1; }
 [ -d "$RecipesDirectory" ] || { echo "rebuild-packages: no recipes at $RecipesDirectory" >&2; exit 1; }
 [ -x "$RootfsDirectory/usr/bin/gcc" ] || { echo "rebuild-packages: the userland has no gcc" >&2; exit 1; }
@@ -68,21 +73,35 @@ chmod +x "$WorkHost/scripts/build-package.sh"
 echo "== taking the host out of the recipes"
 bash "$ScriptDirectory/patch-recipes-for-native.sh" "$WorkHost/packages" || exit 1
 
-# lzip is not a package in this system, and one source is a .tar.lz. The host
-# unpacks it and the recipe is pointed at the plain file, which is why the
-# patch above changes that recipe's ArchiveFormat.
-if [ -f "$WorkHost/src/ed-1.22.tar.lz" ] && [ ! -f "$WorkHost/src/ed-1.22.tar" ]; then
-	echo "== unpacking ed-1.22.tar.lz, because this system has no lzip"
-	if command -v lzip >/dev/null 2>&1; then
-		lzip -dc "$WorkHost/src/ed-1.22.tar.lz" > "$WorkHost/src/ed-1.22.tar"
-	elif python3 -c 'import lzma,sys; sys.exit(0)' 2>/dev/null; then
-		python3 -c 'import lzma,sys; open(sys.argv[2],"wb").write(lzma.open(sys.argv[1],"rb").read())' \
-			"$WorkHost/src/ed-1.22.tar.lz" "$WorkHost/src/ed-1.22.tar"
-	else
-		echo "!! ed-1.22.tar.lz cannot be unpacked here, so ed will not build" >&2
-	fi
-	[ -s "$WorkHost/src/ed-1.22.tar" ] && echo "== ed-1.22.tar is ready"
-fi
+# lzip is not a package in this system, and one source is a .tar.lz. It is
+# unpacked here, on the host, and the recipe is pointed at the plain tar, which
+# is why the patch above changes that recipe's ArchiveFormat from lz to auto.
+#
+# lzip is used rather than Python's lzma, which cannot read this format: lzip is
+# the LZMA-based format with its own container, and lzma.open() rejects it.
+#
+# This runs after the sources are fetched, not before, because the .tar.lz is
+# what the fetch downloads in the first place.
+UnpackLzipSources() {
+	local Recipe Package Url Name
+	for Recipe in "$WorkHost/packages"/*.conf; do
+		Package="$(basename "$Recipe" .conf)"
+		Url="$(sed -n 's/^Url=["]*\([^"]*\)["]*$/\1/p' "$Recipe" | head -1)"
+		case "$Url" in
+			*.lz) ;;
+			*) continue ;;
+		esac
+		Name="$(basename "${Url%%\?*}")"
+		[ -s "$WorkHost/src/$Name" ] || continue
+		[ -s "$WorkHost/src/${Name%.lz}" ] && continue
+		echo "== unpacking $Name, because this system has no lzip"
+		if command -v lzip >/dev/null 2>&1; then
+			lzip -dc "$WorkHost/src/$Name" > "$WorkHost/src/${Name%.lz}"
+		else
+			echo "!! lzip is not available, so $Package cannot be unpacked" >&2
+		fi
+	done
+}
 
 # Which packages to build. The toolchain, the C library, the crypt library and
 # the package manager have their own steps; rebuilding them here would fight
@@ -135,6 +154,11 @@ done
 echo "== $Fetched sources ready, $Unfetched missing"
 [ "$Unfetched" -eq 0 ] || { echo "rebuild-packages: some sources are missing" >&2; exit 1; }
 du -sh "$WorkHost/src" | sed 's/^/   /'
+
+# One of the sources is a .tar.lz and this system has no lzip. It is unpacked
+# here so the build is handed a plain tar, which the recipe was patched to
+# expect. Its sha256 is still checked against the bytes that were fetched.
+UnpackLzipSources
 
 # Two things have to be in the tree before anything can be packed, and neither
 # arrives through the package manager at this point in the run.
@@ -389,13 +413,20 @@ echo "== rebuilt $Built packages, $Failed failed"
 if [ "$Failed" -gt 0 ]; then
 	echo "== failed: ${FailedList[*]}"
 	# The reason each one failed is the only thing worth reading afterwards, and
-	# the per package logs do not survive the run. The first line that looks like
-	# an error is pulled out of each one here, so the report is complete in one
-	# place instead of being buried in a megabyte of build output.
+	# the per package logs do not survive the run. One line is pulled out of each
+	# one here, so the report is complete in one place instead of being buried in
+	# a megabyte of build output.
+	#
+	# The last match is taken rather than the first, because a source file can
+	# contain the word error: in its own text - bash has a function called
+	# test_syntax_error - and the diagnostic that ended the build comes at the
+	# end. The patterns are the ones a compiler or configure actually prints, so
+	# a stray line of source does not get reported as the reason.
 	: > failures.txt
 	for Package in "${FailedList[@]}"; do
-		Reason="$(grep -m1 -E 'error:|Error [0-9]+|undefined reference|cannot find|No such file|not found|command not found' \
-			"logs/$Package.log" 2>/dev/null | sed 's/^[[:space:]]*//' | cut -c1-200)"
+		Reason="$(tac "logs/$Package.log" 2>/dev/null |
+			grep -m1 -E 'configure: error:|^[^ ]*:[0-9]+:[0-9]+: error:|error: |Error [0-9]+|undefined reference to|cannot find -l|command not found|No such file or directory' |
+			sed 's/^[[:space:]]*//' | cut -c1-200)"
 		[ -n "$Reason" ] || Reason="$(tail -3 "logs/$Package.log" 2>/dev/null | tr '\n' ' ' | cut -c1-200)"
 		printf '%s: %s\n' "$Package" "$Reason" >> failures.txt
 	done
