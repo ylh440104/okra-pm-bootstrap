@@ -295,6 +295,19 @@ echo "=============================================================="
 echo "== rebuilt $Built packages, $Failed failed"
 if [ "$Failed" -gt 0 ]; then
 	echo "== failed: ${FailedList[*]}"
+	# The reason each one failed is the only thing worth reading afterwards, and
+	# the per package logs do not survive the run. The first line that looks like
+	# an error is pulled out of each one here, so the report is complete in one
+	# place instead of being buried in a megabyte of build output.
+	: > failures.txt
+	for Package in "${FailedList[@]}"; do
+		Reason="$(grep -m1 -E 'error:|Error [0-9]+|undefined reference|cannot find|No such file|not found|command not found' \
+			"logs/$Package.log" 2>/dev/null | sed 's/^[[:space:]]*//' | cut -c1-200)"
+		[ -n "$Reason" ] || Reason="$(tail -3 "logs/$Package.log" 2>/dev/null | tr '\n' ' ' | cut -c1-200)"
+		printf '%s: %s\n' "$Package" "$Reason" >> failures.txt
+	done
+	echo "== why each one failed"
+	cat failures.txt
 fi
 [ "$Failed" -eq 0 ]
 INNER
@@ -344,6 +357,15 @@ for Archive in "$RootfsDirectory"/tmp/okra-artifacts/*/*.oaa; do
 done
 echo "== $Count archives came back intact"
 [ "$Damaged" -eq 0 ] || echo "== $Damaged archives were damaged and left behind" >&2
+
+# The per package logs are the only record of why a build failed, and they do
+# not survive the run unless they are brought out. They go into the output
+# directory so they travel with the artifacts.
+if [ -d "$WorkHost/logs" ]; then
+	cp -a "$WorkHost/logs" "$OutputDirectory/" 2>/dev/null || true
+	echo "== the per package logs are in $OutputDirectory/logs"
+fi
+[ -f "$WorkHost/failures.txt" ] && cat "$WorkHost/failures.txt"
 [ "$Count" -gt 0 ] || { echo "rebuild-packages: no archives were produced" >&2; exit 1; }
 
 [ "$InnerStatus" -eq 0 ] || {
