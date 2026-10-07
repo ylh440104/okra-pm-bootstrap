@@ -143,20 +143,30 @@ Build() {
 }
 ''')
 
-# perl 5.40 assumes glibc records LC_ALL as name=value pairs. Its probe compiles
-# a program that prints the separator it observes, and here the program exits
-# without printing one, so the assumption is recorded as false. The code path for
-# that case needs a macro that only exists for the positional notation the probe
-# decided against, so locale.c does not compile:
+# perl 5.40 does not compile its locale code here:
 #
 #     locale.c:8812:43: error: 'PERL_LC_ALL_CATEGORY_POSITIONS_INIT' undeclared
 #
-# Perl is built after the ncurses names are in place, so this is the next
-# failure in line rather than one of the current ones.
+# The macro is defined in perl.h only inside this block:
+#
+#     #  if defined(USE_FAKE_LC_ALL_POSITIONAL_NOTATION)
+#        && defined(PERL_LC_ALL_USES_NAME_VALUE_PAIRS)
+#     #    define PERL_LC_ALL_CATEGORY_POSITIONS_INIT { 12, 11, 10, ... }
+#
+# so both macros have to be present. Configure decides them by compiling a
+# program that asks the C library how it separates the categories inside LC_ALL
+# and prints the answer. Here that program prints nothing, so Configure records
+# "name=value pairs" as false and leaves PERL_LC_ALL_USES_NAME_VALUE_PAIRS
+# undefined. The code path for that case then needs the macro above, which only
+# exists for the notation that was just ruled out.
+#
+# Both are passed in one -Accflags, not two: Configure treats -Accflags as an
+# assignment, so a second one would replace the first rather than add to it.
 Substitute(
     'perl',
     '-Dman1ext=1 -Dman3ext=3pm',
-    '-Dman1ext=1 -Dman3ext=3pm -Accflags=-DUSE_FAKE_LC_ALL_POSITIONAL_NOTATION',
+    '-Dman1ext=1 -Dman3ext=3pm'
+    ' -Accflags=-DUSE_FAKE_LC_ALL_POSITIONAL_NOTATION\\ -DPERL_LC_ALL_USES_NAME_VALUE_PAIRS',
     'the LC_ALL syntax probe is skipped and the positional notation is assumed')
 
 # coreutils' configure calls hostname, which is one of the programs this package
@@ -237,18 +247,21 @@ Build() {
 	PkgDirectory="$InstallRoot/usr/lib/pkgconfig"
 	mkdir -p "$PkgDirectory"
 	for Module in ncurses ncursesw tinfo; do
+		# The heredoc is unquoted so $Module is substituted, which means the
+		# pkg-config variables have to be escaped or the shell expands them and
+		# fails on the unbound name.
 		cat > "$PkgDirectory/$Module.pc" <<PC
 prefix=/usr
-exec_prefix=${prefix}
-libdir=${exec_prefix}/lib
-includedir=${prefix}/include
+exec_prefix=\${prefix}
+libdir=\${exec_prefix}/lib
+includedir=\${prefix}/include
 
 Name: $Module
 Description: ncurses terminal library
 Version: 6.5
-Libs: -L${libdir} -l$Module
+Libs: -L\${libdir} -l$Module
 Libs.private: -lm
-Cflags: -I${includedir}
+Cflags: -I\${includedir}
 PC
 	done
 }
