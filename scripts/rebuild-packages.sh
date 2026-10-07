@@ -78,6 +78,11 @@ for Package in "${Packages[@]}"; do
 	case "$BuiltAlready" in
 		*" $Package "*) LeftOut+=("$Package"); continue ;;
 	esac
+	# A caller can name packages that cannot be built here at all, so that the
+	# reason is recorded by the caller rather than discovered by a failed build.
+	case " ${OKRA_SKIP:-} " in
+		*" $Package "*) LeftOut+=("$Package"); continue ;;
+	esac
 	ToBuild+=("$Package")
 done
 [ "${#ToBuild[@]}" -gt 0 ] || { echo "rebuild-packages: nothing to build" >&2; exit 1; }
@@ -256,6 +261,24 @@ cd /usr/src/okra-packages || exit 1
 echo "== what is doing the building"
 gcc --version | head -1
 ld --version | head -1
+
+# The language standard is pinned rather than left to the compiler default.
+#
+# GCC 15 and later default to C23, and glibc 2.43 exposes the ISO C23 generic
+# macros when that is in force: bsearch, free and realloc become macros whose
+# arguments cannot contain a comma, so a call passing a compound literal breaks
+# with "macro 'bsearch' passed 6 arguments, but takes just 5". util-linux 2.40
+# is one tree that does this. The cross build used an older compiler whose
+# default was C17, which is why the same recipe built then and not now.
+#
+# Pinning it keeps the result defined by the recipe instead of by whichever
+# compiler happens to be current. The hardening flags come from the library so
+# the two builds do not drift apart.
+RepositoryRoot=/usr/src/okra-packages
+. "$RepositoryRoot/scripts/lib-native.sh"
+export CFLAGS="$(OkraHardeningFlags) -std=gnu17"
+export CXXFLAGS="$(OkraHardeningFlags) -std=gnu++17"
+echo "== CFLAGS: $CFLAGS"
 
 mapfile -t Packages < packages.txt
 Built=0
