@@ -126,7 +126,16 @@ jobs:
           # on the runner.
           #
           # It takes a while: gcc alone is tens of minutes.
-          sudo -E ./scripts/rebuild-native.sh "$RUNNER_TEMP/okra-rootfs"
+          # The build output is enormous and would push the job log past the
+          # size GitHub keeps, which silently drops the output of every later
+          # step. It goes to a file, a summary is printed, and the file is
+          # uploaded with the other logs.
+          sudo -E ./scripts/rebuild-native.sh "$RUNNER_TEMP/okra-rootfs" \
+            > "$RUNNER_TEMP/rebuild-native.log" 2>&1 || {
+              tail -60 "$RUNNER_TEMP/rebuild-native.log" >&2
+              exit 1
+            }
+          grep -E '^(==|ok |FAIL|!!)' "$RUNNER_TEMP/rebuild-native.log" | tail -25
           sudo chown -R "$(id -u):$(id -g)" "$RUNNER_TEMP/okra-rootfs"
 
       - name: Rebuild the C library inside the userland
@@ -138,7 +147,12 @@ jobs:
           # toolchain: every binary links against it. It is rebuilt with the
           # compiler the userland built, and libxcrypt comes first because perl
           # needs it and glibc's build calls perl.
-          sudo -E ./scripts/rebuild-libc.sh "$RUNNER_TEMP/okra-rootfs"
+          sudo -E ./scripts/rebuild-libc.sh "$RUNNER_TEMP/okra-rootfs" \
+            > "$RUNNER_TEMP/rebuild-libc.log" 2>&1 || {
+              tail -60 "$RUNNER_TEMP/rebuild-libc.log" >&2
+              exit 1
+            }
+          grep -E '^(==|ok |FAIL|!!)' "$RUNNER_TEMP/rebuild-libc.log" | tail -25
           sudo chown -R "$(id -u):$(id -g)" "$RUNNER_TEMP/okra-rootfs"
 
       - name: Compile the package manager inside the userland
@@ -149,7 +163,12 @@ jobs:
           set -euo pipefail
           sudo -E ./scripts/build-okrapm.sh \
             "$RUNNER_TEMP/okra-rootfs" \
-            "$RUNNER_TEMP/okra-okrapm"
+            "$RUNNER_TEMP/okra-okrapm" \
+            > "$RUNNER_TEMP/build-okrapm.log" 2>&1 || {
+              tail -60 "$RUNNER_TEMP/build-okrapm.log" >&2
+              exit 1
+            }
+          grep -E '^(==|ok |FAIL|!!)' "$RUNNER_TEMP/build-okrapm.log" | tail -15
           sudo chown -R "$(id -u):$(id -g)" "$RUNNER_TEMP/okra-okrapm"
 
       - name: Build the software source
@@ -158,7 +177,12 @@ jobs:
           OKRA_ARTIFACTS: ${{ runner.temp }}/okra-okrapm/Okra.okrapm.oaa
         run: |
           set -euo pipefail
-          ./scripts/publish-repo.sh
+          ./scripts/publish-repo.sh > "$RUNNER_TEMP/publish-repo.log" 2>&1 || {
+            tail -60 "$RUNNER_TEMP/publish-repo.log" >&2
+            exit 1
+          }
+          grep -E '^(==|ok |FAIL|!!)' "$RUNNER_TEMP/publish-repo.log" | tail -20
+
       - name: Rebuild the userland packages inside the userland
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -228,6 +252,19 @@ jobs:
           # install still passes and then the chroot is refused.
           sudo -E ./scripts/verify-scheme-b.sh ./repo "$RUNNER_TEMP/host-lunar/lunar"
 
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: okra-scheme-b-logs
+          # The build logs are the only record of what each step did, and the
+          # job log itself is truncated by GitHub once it grows past a few
+          # megabytes, which silently drops the output of the later steps.
+          path: |
+            ${{ runner.temp }}/*.log
+            ${{ runner.temp }}/okra-rebuilt/logs/*.log
+          if-no-files-found: warn
+          retention-days: 14
 
       - uses: actions/upload-artifact@v4
         with:
