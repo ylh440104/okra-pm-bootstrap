@@ -61,6 +61,29 @@ cp -a "$SourceDirectory/scripts/lib.sh" "$WorkHost/scripts/"
 cp -a "$SourceDirectory/scripts/build-package.sh" "$WorkHost/scripts/"
 chmod +x "$WorkHost/scripts/build-package.sh"
 
+# The recipes were written for a build on a full host and a few of them reach for
+# something only a host has: fakeroot, lzip, or a program the package itself
+# provides. Those calls succeeded by accident while the build ran on the runner.
+# They are taken out here, in one place, rather than by rewriting the recipes.
+echo "== taking the host out of the recipes"
+bash "$ScriptDirectory/patch-recipes-for-native.sh" "$WorkHost/packages" || exit 1
+
+# lzip is not a package in this system, and one source is a .tar.lz. The host
+# unpacks it and the recipe is pointed at the plain file, which is why the
+# patch above changes that recipe's ArchiveFormat.
+if [ -f "$WorkHost/src/ed-1.22.tar.lz" ] && [ ! -f "$WorkHost/src/ed-1.22.tar" ]; then
+	echo "== unpacking ed-1.22.tar.lz, because this system has no lzip"
+	if command -v lzip >/dev/null 2>&1; then
+		lzip -dc "$WorkHost/src/ed-1.22.tar.lz" > "$WorkHost/src/ed-1.22.tar"
+	elif python3 -c 'import lzma,sys; sys.exit(0)' 2>/dev/null; then
+		python3 -c 'import lzma,sys; open(sys.argv[2],"wb").write(lzma.open(sys.argv[1],"rb").read())' \
+			"$WorkHost/src/ed-1.22.tar.lz" "$WorkHost/src/ed-1.22.tar"
+	else
+		echo "!! ed-1.22.tar.lz cannot be unpacked here, so ed will not build" >&2
+	fi
+	[ -s "$WorkHost/src/ed-1.22.tar" ] && echo "== ed-1.22.tar is ready"
+fi
+
 # Which packages to build. The toolchain, the C library, the crypt library and
 # the package manager have their own steps; rebuilding them here would fight
 # with those.
@@ -204,6 +227,47 @@ if [ -x "$Ldconfig" ] && [ -x "$RootfsDirectory/lib64/ld-linux-x86-64.so.2" ]; t
 		"$Ldconfig" -r "$RootfsDirectory" >/dev/null 2>&1 && echo "== the loader cache was refreshed"
 fi
 
+# The names a build system looks for when it links ncurses, and the pkg-config
+# files it reads to find it, are not installed by the ncurses recipe: only the
+# wide library and the versioned names are. That is why dialog reports "Cannot
+# link ncurses library", procps reports "ncurses support missing" and gettext
+# cannot find where the terminfo functions come from.
+#
+# They are added to the tree here rather than only to the recipe because the
+# packages that need them are built before ncurses in this order, so a fixed
+# ncurses package would not help until the run after next. The ncurses recipe is
+# patched as well, so the package that comes out of this run carries the same
+# names and the two do not drift apart.
+echo "== adding the ncurses names a build looks for"
+NcursesLibrary=""
+for Candidate in libncursesw.so.6 libncurses.so.6; do
+	[ -e "$RootfsDirectory/usr/lib/$Candidate" ] && { NcursesLibrary="$Candidate"; break; }
+done
+if [ -n "$NcursesLibrary" ]; then
+	for Link in libncurses.so libtinfo.so libcurses.so; do
+		ln -sfn "$NcursesLibrary" "$RootfsDirectory/usr/lib/$Link"
+	done
+	mkdir -p "$RootfsDirectory/usr/lib/pkgconfig"
+	for Module in ncurses ncursesw tinfo; do
+		cat > "$RootfsDirectory/usr/lib/pkgconfig/$Module.pc" <<PC
+prefix=/usr
+exec_prefix=\${prefix}
+libdir=\${exec_prefix}/lib
+includedir=\${prefix}/include
+
+Name: $Module
+Description: ncurses terminal library
+Version: 6.5
+Libs: -L\${libdir} -l$Module
+Libs.private: -lm
+Cflags: -I\${includedir}
+PC
+	done
+	echo "== libncurses.so, libtinfo.so and the pkg-config files point at $NcursesLibrary"
+else
+	echo "!! no ncurses library in the tree, so dialog, gettext and procps cannot link" >&2
+fi
+
 # The build script's only host assumption is the one function that reaches for a
 # package manager. It is replaced once, here, by appending an override to a copy
 # of the library that the build script is pointed at.
@@ -296,6 +360,12 @@ for Package in "${Packages[@]}"; do
 	# whatever happened to be lying around.
 	Url="$(sed -n 's/^Url=["]*\([^"]*\)["]*$/\1/p' "$Recipe" | head -1)"
 	Name="$(basename "${Url%%\?*}")"
+	# A source that the host had to unpack on the way in is on disk under a
+	# different name: ed ships as .tar.lz and is handed over as .tar. The recipe
+	# is pointed at whatever is actually there.
+	if [ ! -s "src/$Name" ] && [ -s "src/${Name%.lz}" ]; then
+		Name="${Name%.lz}"
+	fi
 	if [ ! -s "src/$Name" ]; then
 		echo "!! no source for $Package" >&2
 		Failed=$((Failed + 1)); FailedList+=("$Package"); continue

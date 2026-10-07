@@ -81,10 +81,18 @@ done
 # cache below are what make it work: ldconfig reads ld.so.conf and writes
 # ld.so.cache, which is how every distribution solves this. It runs through the
 # loader rather than chroot, so assembling a tree does not need root.
+#
+# /lib and /usr/lib64 are in the list because packages install into them:
+# util-linux puts libuuid.so.1 in /lib, which leaves /usr/lib/libuuid.so pointing
+# at a file the loader was never told about. Python then fails to import _uuid
+# with "libuuid.so.1: cannot open shared object file" even though the library is
+# right there in the tree.
 echo "== writing the loader configuration"
 cat > "$RootfsDirectory/etc/ld.so.conf" <<'EOF'
 /usr/lib64
 /usr/lib
+/lib64
+/lib
 EOF
 
 RunLdconfig() {
