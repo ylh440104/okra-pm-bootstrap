@@ -29,6 +29,10 @@ on:
         description: 'okrapm revision to build (branch, tag or commit)'
         required: false
         default: 'main'
+      okrapm_repository:
+        description: 'okrapm repository, so a change can be tried before it lands upstream'
+        required: false
+        default: 'OkraLinux/okrapm'
       publish:
         description: 'Publish the repository and the package manager as a release'
         type: boolean
@@ -82,7 +86,7 @@ jobs:
           # oaa-build from the okrapm project, and the verification below builds
           # lunar from the same checkout.
           git clone -q --depth 1 --branch "${{ github.event.inputs.okrapm_ref }}" \
-            https://github.com/OkraLinux/okrapm.git vendor/okrapm
+            "https://github.com/${{ github.event.inputs.okrapm_repository }}.git" vendor/okrapm
           ls vendor/okrapm/oaatools | head -5
           # The host lunar does the first install, so it needs the same fix the
           # in-userland build applies: without it, installing mangles every
@@ -157,10 +161,31 @@ jobs:
           grep -E '^(==|ok |FAIL|!!)' "$RUNNER_TEMP/rebuild-libc.log" | tail -25
           sudo chown -R "$(id -u):$(id -g)" "$RUNNER_TEMP/okra-rootfs"
 
+      - name: Rebuild gcc against the C library the system now has
+        env:
+          OKRA_JOBS: '4'
+          OKRA_GCC_PASS: second
+        run: |
+          set -euo pipefail
+          # The first pass built gcc while the cross built glibc was still in the
+          # tree, and the step before this one replaced that glibc. A compiler
+          # linked against a C library that is no longer there is the detail a
+          # bootstrap is easiest to get subtly wrong, so the compiler is the last
+          # thing built rather than the second. Same source, same arguments: the
+          # only thing that changed is the libc it is linked against.
+          sudo -E ./scripts/rebuild-native.sh "$RUNNER_TEMP/okra-rootfs" \
+            > "$RUNNER_TEMP/rebuild-gcc-second.log" 2>&1 || {
+              tail -60 "$RUNNER_TEMP/rebuild-gcc-second.log" >&2
+              exit 1
+            }
+          grep -E '^(==|ok |FAIL|!!)' "$RUNNER_TEMP/rebuild-gcc-second.log" | tail -25
+          sudo chown -R "$(id -u):$(id -g)" "$RUNNER_TEMP/okra-rootfs"
+
       - name: Compile the package manager inside the userland
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           OKRA_OKRAPM_REF: ${{ github.event.inputs.okrapm_ref }}
+          OKRA_OKRAPM_REPOSITORY: https://github.com/${{ github.event.inputs.okrapm_repository }}.git
         run: |
           set -euo pipefail
           sudo -E ./scripts/build-okrapm.sh \

@@ -22,6 +22,13 @@
 #   OKRA_BINUTILS_VERSION   default 2.44, matching the cross toolchain
 #   OKRA_GCC_VERSION        default 16.2.0, matching the cross toolchain
 #   OKRA_GNU_MIRROR         default https://mirrors.kernel.org/gnu
+#   OKRA_GCC_PASS           first (default) builds binutils and gcc from a
+#                           freshly unpacked source tree; second rebuilds gcc
+#                           alone, reusing that tree, after the C library has
+#                           been replaced. A compiler linked against a libc
+#                           that has since been swapped out is the one detail
+#                           a bootstrap is easy to get wrong, so the last
+#                           thing built is the compiler itself.
 # Return: 0 only when the userland built its own compiler and ran a program
 #         with it. Any failure before that is reported and exits non-zero.
 set -uo pipefail
@@ -31,6 +38,7 @@ Jobs="${OKRA_JOBS:-4}"
 BinutilsVersion="${OKRA_BINUTILS_VERSION:-2.44}"
 GccVersion="${OKRA_GCC_VERSION:-16.2.0}"
 Mirror="${OKRA_GNU_MIRROR:-https://mirrors.kernel.org/gnu}"
+GccPass="${OKRA_GCC_PASS:-first}"
 
 [ -d "$RootfsDirectory" ] || { echo "rebuild-native: no rootfs at $RootfsDirectory" >&2; exit 1; }
 [ -x "$RootfsDirectory/usr/bin/gcc" ] || {
@@ -81,18 +89,48 @@ ShowToolchain() {
 		"$RootfsDirectory/$Program" --version 2>/dev/null | head -1 || true
 }
 
+# BinaryDigest() - the sha256 of the compiler binaries in the tree.
+# Return: 0. Prints one line per binary.
+#
+# The configure line does not change between the two passes - the arguments are
+# the same - so Fingerprint cannot tell them apart. The binaries themselves do
+# change, because a different compiler produced them.
+BinaryDigest() {
+	local Program
+	for Program in usr/bin/gcc usr/bin/g++ usr/libexec/gcc/x86_64-pc-linux-gnu/*/cc1; do
+		[ -f "$RootfsDirectory/$Program" ] || continue
+		printf '%s  %s\n' "$(sha256sum "$RootfsDirectory/$Program" | cut -d' ' -f1)" "$Program"
+	done
+}
+
+Snapshot() {
+	if [ "$GccPass" = "second" ]; then
+		BinaryDigest
+	else
+		Fingerprint usr/bin/gcc
+	fi
+}
+
 echo "== fetching the sources into the userland"
 # A native gcc build wants a few gigabytes of scratch space, so the room left is
 # reported before anything is unpacked rather than as a failure mid-make.
 df -h "$RootfsDirectory" | tail -1
-Fetch "$Mirror/binutils/binutils-$BinutilsVersion.tar.xz" "$Sources/binutils.tar.xz" || {
-	echo "rebuild-native: could not fetch binutils" >&2
-	exit 1
-}
-Fetch "$Mirror/gcc/gcc-$GccVersion/gcc-$GccVersion.tar.xz" "$Sources/gcc.tar.xz" || {
-	echo "rebuild-native: could not fetch gcc" >&2
-	exit 1
-}
+if [ "$GccPass" = "first" ]; then
+	Fetch "$Mirror/binutils/binutils-$BinutilsVersion.tar.xz" "$Sources/binutils.tar.xz" || {
+		echo "rebuild-native: could not fetch binutils" >&2
+		exit 1
+	}
+	Fetch "$Mirror/gcc/gcc-$GccVersion/gcc-$GccVersion.tar.xz" "$Sources/gcc.tar.xz" || {
+		echo "rebuild-native: could not fetch gcc" >&2
+		exit 1
+	}
+else
+	[ -d "$Sources/gcc-src" ] || {
+		echo "rebuild-native: the second pass needs the gcc source the first one unpacked" >&2
+		exit 1
+	}
+	echo "== reusing the source tree the first pass left in $Sources/gcc-src"
+fi
 ls -la "$Sources"
 
 # The fingerprint of the compiler before the rebuild. It has to be something
@@ -100,7 +138,7 @@ ls -la "$Sources"
 # the comparison below proves nothing.
 echo "== the compiler that is about to be replaced"
 ShowToolchain usr/bin/gcc
-Before="$(Fingerprint usr/bin/gcc)"
+Before="$(Snapshot)"
 [ -n "$Before" ] || { echo "rebuild-native: the userland gcc does not run" >&2; exit 1; }
 echo "$Before" | sed 's/^/   /'
 
@@ -128,6 +166,8 @@ gcc -dumpmachine
 command -v ld || exit 1
 ld --version | head -1
 
+if [ "${OKRA_GCC_PASS:-first}" = "first" ]; then
+
 echo "== extracting the sources"
 rm -rf binutils-src gcc-src
 mkdir -p binutils-src gcc-src
@@ -148,6 +188,13 @@ make install || exit 1
 cd /usr/src/native || exit 1
 echo "== the linker now in place"
 /usr/bin/ld --version | head -1
+
+else
+
+echo "== second pass: binutils and the sources stay as the first pass left them"
+[ -d gcc-src ] || { echo "no gcc-src to rebuild from" >&2; exit 1; }
+
+fi
 
 echo "== building gcc ${OKRA_GCC_VERSION}, natively"
 # download_prerequisites is not run: it fetches gmp, mpfr and mpc from
@@ -220,6 +267,7 @@ chroot "$RootfsDirectory" /usr/bin/env -i \
 	OKRA_JOBS="$Jobs" \
 	OKRA_BINUTILS_VERSION="$BinutilsVersion" \
 	OKRA_GCC_VERSION="$GccVersion" \
+	OKRA_GCC_PASS="$GccPass" \
 	/bin/bash /usr/src/native/inner.sh
 InnerStatus=$?
 [ "$InnerStatus" -eq 0 ] || {
@@ -232,7 +280,7 @@ trap - EXIT
 
 echo "== the toolchain in the userland is now the one it built"
 ShowToolchain usr/bin/gcc
-After="$(Fingerprint usr/bin/gcc)"
+After="$(Snapshot)"
 [ -n "$After" ] || { echo "rebuild-native: the rebuilt gcc does not run" >&2; exit 1; }
 echo "$After" | sed 's/^/   /'
 
@@ -251,6 +299,11 @@ echo "   after:"
 echo "$After" | sed 's/^/     /'
 
 echo "== what is still cross built"
-echo "   glibc, the C library: replacing it in place needs a two phase install"
-echo "   the 70 packages, which were cross compiled before this step existed"
+if [ "$GccPass" = "second" ]; then
+	echo "   nothing that this step rebuilds: gcc was compiled by the compiler"
+	echo "   the system already had, against the C library it now runs on"
+else
+	echo "   glibc, the C library: replacing it in place needs a two phase install"
+	echo "   the 68 packages, which were cross compiled before this step existed"
+fi
 echo "== done"
