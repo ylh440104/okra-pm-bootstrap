@@ -69,6 +69,12 @@ try:
     data = json.load(sys.stdin)
 except Exception:
     sys.exit(1)
+# An error response parses as JSON too, so checking for the list alone would
+# report a permission problem or a rate limit as "nothing published". That is
+# how an expired cache came to look like an empty repository.
+if "message" in data:
+    print(data["message"], file=sys.stderr)
+    sys.exit(1)
 for a in data.get("artifacts", []):
     if a.get("expired"):
         continue
@@ -142,5 +148,39 @@ fi
 echo "== that artifact did not produce a usable toolchain" >&2
 done <<< "$Artifacts"
 
+# The artifact is a cache with a 14 day life, so it is expected to be gone most
+# of the time. The same tarball is published as a release asset, which does not
+# expire: without this the chain stops working two weeks after the last run and
+# says the repository has nothing, which is not what happened.
+ReleaseTag="${OKRA_TOOLCHAIN_RELEASE:-cross-toolchain}"
+ReleaseBase="https://github.com/$SourceRepository/releases/download/$ReleaseTag"
+echo "== looking for the seed in the $ReleaseTag release"
+Archive="$ScratchDirectory/okra-cross-toolchain.tar.zst"
+ArchiveSum="$Archive.sha256"
+if curl -fsSL --retry 3 -m 1200 -H "Authorization: token $Token" \
+	-o "$Archive" "$ReleaseBase/okra-cross-toolchain.tar.zst" &&
+	curl -fsSL --retry 3 -m 1200 -H "Authorization: token $Token" \
+	-o "$ArchiveSum" "$ReleaseBase/okra-cross-toolchain.tar.zst.sha256"; then
+	Expected="$(awk '{print $1}' "$ArchiveSum")"
+	Actual="$(sha256sum "$Archive" | awk '{print $1}')"
+	if [ "$Expected" != "$Actual" ]; then
+		echo "== the published toolchain checksum does not match" >&2
+	else
+		sudo mkdir -p "$(dirname "$ToolchainRoot")"
+		sudo rm -rf "$ToolchainRoot"
+		if sudo tar --zstd -xf "$Archive" -C "$(dirname "$ToolchainRoot")" &&
+			sudo chown -R "$(id -u):$(id -g)" "$ToolchainRoot" &&
+			ToolchainIsUsable; then
+			echo "== the cross toolchain from the $ReleaseTag release is in place"
+			"$(CrossGcc)" --version | head -1
+			exit 0
+		fi
+		echo "== the published toolchain did not unpack into a usable one" >&2
+	fi
+else
+	echo "== the $ReleaseTag release does not have the toolchain either" >&2
+fi
+
 echo "== no usable cross toolchain could be fetched" >&2
+echo "   rebuild it with: gh workflow run bootstrap-toolchain.yml -f rebuild_toolchain=true" >&2
 exit 1

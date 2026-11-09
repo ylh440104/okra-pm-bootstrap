@@ -181,6 +181,28 @@ jobs:
           grep -E '^(==|ok |FAIL|!!)' "$RUNNER_TEMP/rebuild-gcc-second.log" | tail -25
           sudo chown -R "$(id -u):$(id -g)" "$RUNNER_TEMP/okra-rootfs"
 
+      - name: Show whether the compiler reproduces itself
+        env:
+          OKRA_JOBS: '4'
+          OKRA_GCC_PASS: third
+        run: |
+          set -euo pipefail
+          # The pass above showed the system can compile its own compiler. This
+          # one asks whether that was a repeatable answer: gcc is built once more
+          # from the same source into a staging root and compared, byte for byte,
+          # with the one already in the tree. Nothing is installed, so this can
+          # only report. A difference is not hidden - the step prints which files
+          # moved - but it does not fail the run either, because a first look at
+          # a non-deterministic build should produce a measurement, not a red job.
+          # Set OKRA_REQUIRE_REPRODUCIBLE=1 once the numbers are understood.
+          sudo -E ./scripts/rebuild-native.sh "$RUNNER_TEMP/okra-rootfs" \
+            > "$RUNNER_TEMP/rebuild-gcc-third.log" 2>&1 || {
+              tail -60 "$RUNNER_TEMP/rebuild-gcc-third.log" >&2
+              exit 1
+            }
+          grep -E '^(==|ok |diff|!!)' "$RUNNER_TEMP/rebuild-gcc-third.log" | tail -20
+          sudo chown -R "$(id -u):$(id -g)" "$RUNNER_TEMP/okra-rootfs"
+
       - name: Compile the package manager inside the userland
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

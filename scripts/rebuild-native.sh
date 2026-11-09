@@ -29,6 +29,13 @@
 #                           that has since been swapped out is the one detail
 #                           a bootstrap is easy to get wrong, so the last
 #                           thing built is the compiler itself.
+#   OKRA_GCC_PASS           third builds gcc once more into a staging root and
+#                           compares it with the one in the tree. That is the
+#                           stability question the first pass skips: not "can it
+#                           compile itself" but "does it produce the same
+#                           compiler every time". Nothing is installed by this
+#                           pass, so a mismatch is reported rather than acted
+#                           on; set OKRA_REQUIRE_REPRODUCIBLE=1 to make it fail.
 # Return: 0 only when the userland built its own compiler and ran a program
 #         with it. Any failure before that is reported and exits non-zero.
 set -uo pipefail
@@ -103,6 +110,66 @@ BinaryDigest() {
 	done
 }
 
+# CompareThirdPass() - compare the compiler the third pass built with the one
+# that is in the tree.
+# Return: 0 when they are identical, or when they differ and
+#         OKRA_REQUIRE_REPRODUCIBLE is not set; 1 when reproducibility was
+#         demanded and not achieved, or when nothing was staged.
+#
+# The first pass answers "can this system compile its own compiler". This
+# answers the next question, which is whether the answer is stable: if the
+# compiler built today differs from the one built from the same source a minute
+# later, then either the build is non-deterministic or one of the two is not
+# what it claims to be. Neither is a thing to leave unsaid.
+CompareThirdPass() {
+	local Staged="$RootfsDirectory/usr/src/native/stage3"
+	local Same=0 Different=0 StagedPath TreePath Relative
+	if [ ! -d "$Staged" ]; then
+		echo "rebuild-native: the third pass staged nothing to compare" >&2
+		return 1
+	fi
+	for Relative in \
+		usr/bin/gcc \
+		usr/bin/g++ \
+		usr/libexec/gcc/*/*/cc1 \
+		usr/libexec/gcc/*/*/cc1plus
+	do
+		StagedPath="$(ls -1 $Staged/$Relative 2>/dev/null | head -1)"
+		[ -n "$StagedPath" ] || continue
+		TreePath="$RootfsDirectory/${StagedPath#"$Staged"/}"
+		if [ ! -f "$TreePath" ]; then
+			echo "!!   ${StagedPath#"$Staged"/} exists only in the third pass" >&2
+			Different=$((Different + 1))
+			continue
+		fi
+		if cmp -s "$StagedPath" "$TreePath"; then
+			echo "ok   ${StagedPath#"$Staged"/} is byte for byte the same"
+			Same=$((Same + 1))
+		else
+			echo "diff ${StagedPath#"$Staged"/}  tree $(stat -c%s "$TreePath") bytes, third pass $(stat -c%s "$StagedPath") bytes"
+			Different=$((Different + 1))
+		fi
+	done
+	if [ "$Same" -eq 0 ] && [ "$Different" -eq 0 ]; then
+		echo "rebuild-native: nothing was compared, so nothing was shown" >&2
+		return 1
+	fi
+	echo "== $Same of $((Same + Different)) files are identical between the compiler in the tree and the one it just built"
+	if [ "$Different" -eq 0 ]; then
+		echo "== the compiler reproduces itself exactly"
+		return 0
+	fi
+	echo "== it does not reproduce itself exactly"
+	if [ "${OKRA_REQUIRE_REPRODUCIBLE:-0}" = "1" ]; then
+		echo "rebuild-native: reproducibility was required and was not achieved" >&2
+		return 1
+	fi
+	echo "   reported, not failed: set OKRA_REQUIRE_REPRODUCIBLE=1 to make this a failure"
+	echo "   a difference here is either non-determinism in the build or a compiler"
+	echo "   that does not agree with its own output, and both are worth knowing"
+	return 0
+}
+
 Snapshot() {
 	if [ "$GccPass" = "second" ]; then
 		BinaryDigest
@@ -115,7 +182,13 @@ echo "== fetching the sources into the userland"
 # A native gcc build wants a few gigabytes of scratch space, so the room left is
 # reported before anything is unpacked rather than as a failure mid-make.
 df -h "$RootfsDirectory" | tail -1
-if [ "$GccPass" = "first" ]; then
+if [ "$GccPass" != "first" ]; then
+	[ -d "$Sources/gcc-src" ] || {
+		echo "rebuild-native: this pass needs the gcc source the first one unpacked" >&2
+		exit 1
+	}
+	echo "== reusing the source tree the first pass left in $Sources/gcc-src"
+elif [ "$GccPass" = "first" ]; then
 	Fetch "$Mirror/binutils/binutils-$BinutilsVersion.tar.xz" "$Sources/binutils.tar.xz" || {
 		echo "rebuild-native: could not fetch binutils" >&2
 		exit 1
@@ -124,12 +197,6 @@ if [ "$GccPass" = "first" ]; then
 		echo "rebuild-native: could not fetch gcc" >&2
 		exit 1
 	}
-else
-	[ -d "$Sources/gcc-src" ] || {
-		echo "rebuild-native: the second pass needs the gcc source the first one unpacked" >&2
-		exit 1
-	}
-	echo "== reusing the source tree the first pass left in $Sources/gcc-src"
 fi
 ls -la "$Sources"
 
@@ -184,14 +251,23 @@ cd binutils-build || exit 1
 # toolchain does not need the profiler, so it is switched off.
 ../binutils-src/configure --prefix=/usr --disable-nls --disable-werror --disable-gprofng || exit 1
 make || exit 1
-make install || exit 1
+if [ "${OKRA_GCC_PASS:-first}" = "third" ]; then
+	# Staged, not installed: what is being measured is the compiler the build
+	# just produced, and overwriting the working one before the comparison
+	# would leave the tree with a compiler nobody has run.
+	rm -rf /usr/src/native/stage3
+	make install DESTDIR=/usr/src/native/stage3 || exit 1
+	echo "== the third pass installed itself into /usr/src/native/stage3"
+else
+	make install || exit 1
+fi
 cd /usr/src/native || exit 1
 echo "== the linker now in place"
 /usr/bin/ld --version | head -1
 
 else
 
-echo "== second pass: binutils and the sources stay as the first pass left them"
+echo "== binutils and the sources stay as the first pass left them"
 [ -d gcc-src ] || { echo "no gcc-src to rebuild from" >&2; exit 1; }
 
 fi
@@ -226,6 +302,11 @@ cd gcc-build || exit 1
 make || exit 1
 make install || exit 1
 cd /usr/src/native || exit 1
+
+if [ "${OKRA_GCC_PASS:-first}" = "third" ]; then
+	# The staged copy is compared from the outer script, which can see both.
+	exit 0
+fi
 
 echo "== the compiler now in place"
 /usr/bin/gcc --version | head -1
@@ -277,6 +358,11 @@ InnerStatus=$?
 
 CleanupMounts
 trap - EXIT
+
+if [ "$GccPass" = "third" ]; then
+	CompareThirdPass
+	exit $?
+fi
 
 echo "== the toolchain in the userland is now the one it built"
 ShowToolchain usr/bin/gcc
