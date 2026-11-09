@@ -125,30 +125,49 @@ Listing="$(curl -sSL -m 120 \
 printf '%s' "$Listing" | python3 -c '
 import json, sys
 data = json.load(sys.stdin)
-for a in data.get("assets", []):
+for a in sorted(data.get("assets", []), key=lambda x: x["name"]):
     if a["name"].endswith(".oaa"):
-        print(a["name"])
+        print(a["name"], a["id"])
 ' > "$OutputDirectory/download/names.txt"
 
 PackageCount="$(wc -l < "$OutputDirectory/download/names.txt")"
 echo "== $PackageCount packages to fetch"
 [ "$PackageCount" -gt 50 ] || { echo "publish-repo: too few packages" >&2; exit 1; }
 
-while read -r Name; do
+# FetchAsset() - download one release asset, two ways.
+# @Name: asset name.
+# @Id: asset id from the listing.
+# @Target: where to put it.
+# Return: 0 when the bytes are on disk.
+#
+# The release URL goes through an asset CDN that answers 504 in bursts while
+# api.github.com keeps answering. This script fetches the same seventy archives
+# again for its own repository, so without the second way round it fails on the
+# same CDN the other script now copes with.
+FetchAsset() {
+	local Name="$1" Id="$2" Target="$3"
+	curl -fsSL -m 600 --retry 2 --retry-delay 3 --retry-all-errors \
+		-H "Authorization: token $Token" -o "$Target" \
+		"https://github.com/$SourceRepository/releases/download/$SourceRelease/$Name" && return 0
+	[ -n "$Id" ] || return 1
+	echo "== $Name: the release URL did not answer, trying the asset endpoint" >&2
+	curl -fsSL -m 600 --retry 2 --retry-delay 3 --retry-all-errors \
+		-H "Authorization: token $Token" -H 'Accept: application/octet-stream' \
+		-o "$Target" \
+		"https://api.github.com/repos/$SourceRepository/releases/assets/$Id"
+}
+
+while read -r Name AssetId; do
 	[ -n "$Name" ] || continue
 	# The archive and its sidecar checksum are fetched together. Every archive
 	# in this release has one, and the repository has to carry it: the guard
 	# below refuses to finish otherwise, and a checksum that only exists in the
 	# other release is not much use to anyone syncing this one.
-	curl -sSL -m 600 -H "Authorization: token $Token" \
-		-o "$OutputDirectory/artifacts/$Name" \
-		"https://github.com/$SourceRepository/releases/download/$SourceRelease/$Name" || {
+	FetchAsset "$Name" "$AssetId" "$OutputDirectory/artifacts/$Name" || {
 		echo "publish-repo: could not download $Name" >&2
 		exit 1
 	}
-	curl -fsSL -m 120 -H "Authorization: token $Token" \
-		-o "$OutputDirectory/artifacts/$Name.sha256" \
-		"https://github.com/$SourceRepository/releases/download/$SourceRelease/$Name.sha256" || {
+	FetchAsset "$Name.sha256" "" "$OutputDirectory/artifacts/$Name.sha256" || {
 		echo "publish-repo: could not download the checksum for $Name" >&2
 		exit 1
 	}
