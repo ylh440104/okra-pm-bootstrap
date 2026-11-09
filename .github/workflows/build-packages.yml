@@ -136,18 +136,12 @@ jobs:
           Files+=("repo/index.yaml")
           echo "uploading ${#Files[@]} files"
           gh release upload "$Tag" "${Files[@]}" --clobber
-          # Every asset the release holds has to be one the new index describes.
-          mapfile -t Wanted < <(for F in "${Files[@]}"; do basename "$F"; done | sort)
-          Deleted=0
-          while read -r Asset; do
-            [ -n "$Asset" ] || continue
-            if ! printf '%s\n' "${Wanted[@]}" | grep -qxF "$Asset"; then
-              echo "== removing $Asset, which the new repository does not contain"
-              gh release delete-asset "$Tag" "$Asset" --yes >/dev/null
-              Deleted=$((Deleted + 1))
-            fi
-          done < <(gh release view "$Tag" --json assets --jq '.assets[].name')
-          echo "== removed $Deleted stale assets"
+          # Nothing is deleted here. Removing an asset is only safe with the whole
+          # repository in hand, and this run holds only the packages it built: a
+          # check against that list would call the other seventy stale and remove
+          # them. That is what happened once - a hundred and fifty three assets
+          # became seven. scheme-b publishes the whole repository, and removals
+          # belong there.
           gh release view "$Tag" --json assets --jq '.assets | length'
 
       - uses: actions/upload-artifact@v4
