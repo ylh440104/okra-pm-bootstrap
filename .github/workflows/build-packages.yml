@@ -1,0 +1,161 @@
+name: Build packages in the published userland
+
+# The bootstrap proves the system can build itself, and that proof costs about
+# two hours, nearly all of it three gcc builds. Adding a package does not ask
+# that question again: the compiler it needs was built by the bootstrap and is
+# in the repository the bootstrap published.
+#
+# So this installs that repository into an empty directory and compiles the
+# named recipes inside the result. It is a build, not a bootstrap - scheme-b is
+# where the self-hosting claim is made, and it has already been made.
+on:
+  workflow_dispatch:
+    inputs:
+      packages:
+        description: 'Space separated recipe names to build, such as linux-pam dbus'
+        required: true
+      publish:
+        description: 'Publish the new archives and the rebuilt index'
+        type: boolean
+        default: true
+      okrapm_ref:
+        description: 'okrapm revision'
+        required: false
+        default: 'fix/version-suffix'
+      okrapm_repository:
+        description: 'okrapm repository'
+        required: false
+        default: 'ylh440104/okrapm'
+
+permissions:
+  contents: write
+  actions: read
+
+env:
+  OKRA_TARGET_TRIPLE: x86_64-okra-linux-gnu
+  OKRA_PACKAGES_SOURCE_REPOSITORY: ylh440104/okra-oaa-packages-x86_64
+  OKRA_JOBS: '4'
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install what the build needs
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            cmake patchelf patch tar xz-utils zstd gzip bzip2 lzip file rsync \
+            python3 wget curl ca-certificates git unzip
+
+      - name: Fetch the oaa toolkit
+        run: |
+          set -euo pipefail
+          git clone -q --depth 1 --branch "${{ github.event.inputs.okrapm_ref }}" \
+            "https://github.com/${{ github.event.inputs.okrapm_repository }}.git" vendor/okrapm
+          ./scripts/patch-okrapm.sh vendor/okrapm
+
+      - name: Fetch the recipes
+        run: |
+          set -euo pipefail
+          git clone -q --depth 1 --branch "${OKRA_PACKAGES_REF:-main}" \
+            "https://github.com/$OKRA_PACKAGES_SOURCE_REPOSITORY.git" \
+            "$RUNNER_TEMP/okra-packages-repo"
+          ls "$RUNNER_TEMP/okra-packages-repo/packages" | wc -l
+
+      - name: Build the host lunar
+        run: |
+          set -euo pipefail
+          cmake -S vendor/okrapm -B "$RUNNER_TEMP/okrapm-build" \
+            -DCMAKE_BUILD_TYPE=Release >/dev/null
+          cmake --build "$RUNNER_TEMP/okrapm-build" -j4 --target lunar >/dev/null
+          mkdir -p "$RUNNER_TEMP/host-lunar"
+          cp "$RUNNER_TEMP/okrapm-build/src/lunar/lunar" "$RUNNER_TEMP/host-lunar/lunar"
+          "$RUNNER_TEMP/host-lunar/lunar" help | head -3
+
+      - name: Install the published userland
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          ./scripts/install-published-userland.sh \
+            "$RUNNER_TEMP/okra-rootfs" \
+            "$RUNNER_TEMP/host-lunar/lunar" \
+            repo
+
+      - name: Build the requested packages inside it
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PACKAGES: ${{ github.event.inputs.packages }}
+        run: |
+          set -euo pipefail
+          sudo -E env OKRA_OAATOOLS=/usr/lib/okrapm \
+            ./scripts/rebuild-packages.sh \
+            "$RUNNER_TEMP/okra-rootfs" \
+            "$RUNNER_TEMP/okra-packages-repo/packages" \
+            repo \
+            "$RUNNER_TEMP/okra-rebuilt" \
+            $PACKAGES \
+            > "$RUNNER_TEMP/build-packages.log" 2>&1 || {
+              tail -80 "$RUNNER_TEMP/build-packages.log" >&2
+              exit 1
+            }
+          grep -E '^(==|ok |FAIL|!!|[a-z0-9_-]+: )' "$RUNNER_TEMP/build-packages.log" | tail -30
+          sudo chown -R "$(id -u):$(id -g)" "$RUNNER_TEMP/okra-rootfs" "$RUNNER_TEMP/okra-rebuilt"
+
+      - name: Put the new archives into the repository
+        run: |
+          set -euo pipefail
+          # Only the archives that were just built go in. Everything else in
+          # repo/artifacts came from the release this run started from.
+          Found=0
+          for Archive in "$RUNNER_TEMP"/okra-rebuilt/*.oaa; do
+            [ -f "$Archive" ] || continue
+            cp -f "$Archive" repo/artifacts/ || exit 1
+            [ -f "$Archive.sha256" ] && cp -f "$Archive.sha256" repo/artifacts/ || true
+            Found=$((Found + 1))
+          done
+          echo "== $Found new archives"
+          [ "$Found" -gt 0 ] || { echo "no archive was produced" >&2; exit 1; }
+          ./scripts/build-index.sh repo
+          grep -c '^name:' repo/index.yaml
+
+      - name: Publish
+        if: ${{ github.event.inputs.publish == 'true' }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          Tag="okra-repo"
+          Files=()
+          while read -r Name; do
+            Files+=("repo/artifacts/$Name" "repo/artifacts/$Name.sha256")
+          done < <(for A in "$RUNNER_TEMP"/okra-rebuilt/*.oaa; do basename "$A"; done)
+          Files+=("repo/index.yaml")
+          echo "uploading ${#Files[@]} files"
+          gh release upload "$Tag" "${Files[@]}" --clobber
+          # Every asset the release holds has to be one the new index describes.
+          mapfile -t Wanted < <(for F in "${Files[@]}"; do basename "$F"; done | sort)
+          Deleted=0
+          while read -r Asset; do
+            [ -n "$Asset" ] || continue
+            if ! printf '%s\n' "${Wanted[@]}" | grep -qxF "$Asset"; then
+              echo "== removing $Asset, which the new repository does not contain"
+              gh release delete-asset "$Tag" "$Asset" --yes >/dev/null
+              Deleted=$((Deleted + 1))
+            fi
+          done < <(gh release view "$Tag" --json assets --jq '.assets[].name')
+          echo "== removed $Deleted stale assets"
+          gh release view "$Tag" --json assets --jq '.assets | length'
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: okra-fast-build-logs
+          path: |
+            ${{ runner.temp }}/*.log
+            ${{ runner.temp }}/okra-rebuilt/logs/*.log
+          if-no-files-found: warn
+          retention-days: 14
