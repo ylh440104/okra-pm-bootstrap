@@ -182,11 +182,16 @@ jobs:
           sudo chown -R "$(id -u):$(id -g)" "$RUNNER_TEMP/okra-rootfs"
 
       - name: Show whether the compiler reproduces itself
+        continue-on-error: true
         env:
           OKRA_JOBS: '4'
           OKRA_GCC_PASS: third
         run: |
           set -euo pipefail
+          # A measurement, so it is allowed to come back red without taking the
+          # run down with it: this step asks a question, it does not produce
+          # anything the rest of the chain uses. It still shows as a failure when
+          # it fails, because a measurement that did not happen is worth seeing.
           # The pass above showed the system can compile its own compiler. This
           # one asks whether that was a repeatable answer: gcc is built once more
           # from the same source into a staging root and compared, byte for byte,

@@ -251,16 +251,7 @@ cd binutils-build || exit 1
 # toolchain does not need the profiler, so it is switched off.
 ../binutils-src/configure --prefix=/usr --disable-nls --disable-werror --disable-gprofng || exit 1
 make || exit 1
-if [ "${OKRA_GCC_PASS:-first}" = "third" ]; then
-	# Staged, not installed: what is being measured is the compiler the build
-	# just produced, and overwriting the working one before the comparison
-	# would leave the tree with a compiler nobody has run.
-	rm -rf /usr/src/native/stage3
-	make install DESTDIR=/usr/src/native/stage3 || exit 1
-	echo "== the third pass installed itself into /usr/src/native/stage3"
-else
-	make install || exit 1
-fi
+make install || exit 1
 cd /usr/src/native || exit 1
 echo "== the linker now in place"
 /usr/bin/ld --version | head -1
@@ -300,7 +291,16 @@ cd gcc-build || exit 1
 	--disable-nls \
 	--with-gmp=/usr --with-mpfr=/usr --with-mpc=/usr || exit 1
 make || exit 1
-make install || exit 1
+if [ "${OKRA_GCC_PASS:-first}" = "third" ]; then
+	# Staged, not installed. What is being measured is the compiler this build
+	# just produced, and installing it first would leave the tree holding a
+	# compiler nothing has compared and nothing has run.
+	rm -rf /usr/src/native/stage3
+	make install DESTDIR=/usr/src/native/stage3 || exit 1
+	echo "== the third pass installed itself into /usr/src/native/stage3"
+else
+	make install || exit 1
+fi
 cd /usr/src/native || exit 1
 
 if [ "${OKRA_GCC_PASS:-first}" = "third" ]; then
