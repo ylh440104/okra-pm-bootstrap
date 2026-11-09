@@ -65,10 +65,13 @@ LunarVersion() {
 	local IFS=.
 	for Part in $Remaining; do
 		# The resolver uses std::stoi, which reads the digits at the front and
-		# stops at the first character that is not one, so "2025a" is 2025 and
-		# "a2025" is an error. Taking the leading digits reproduces that.
+		# stops at the first character that is not one. It then refuses the
+		# version if anything was left over, so "2025a" is an error rather than
+		# 2025: a suffix that is silently dropped makes two upstream releases
+		# look like one version, and the upgrade never gets offered.
 		Digits="${Part%%[!0-9]*}"
 		[ -n "$Digits" ] || return 1
+		[ "$Digits" = "$Part" ] || return 1
 		Part=$((10#$Digits))
 		case "$Index" in
 			0) Major="$Part" ;;

@@ -167,27 +167,35 @@ echo "== what the transaction recorded"
 InstalledCount="$("$HostLunar" --root "$StateDirectory" list | grep -c . || true)"
 echo "== $InstalledCount records in the system database"
 
-# The userland has to answer to /bin/sh and to have an account database, which
-# no package provides yet: they belong to a base-files package that does not
-# exist. They are created here so the chroot can be entered, and the gap is
-# reported rather than hidden.
-echo "== filling in what no package provides yet"
-mkdir -p "$InstallRoot"/{bin,etc,proc,sys,dev,run,tmp,root}
-for Directory in bin sbin; do
-	if [ -d "$InstallRoot/usr/$Directory" ]; then
-		cp -a --remove-destination "$InstallRoot/usr/$Directory/." "$InstallRoot/$Directory"/
+# /bin/sh, the account database and the loader configuration used to be written
+# here because no package carried them. app.base-files does now, so what is left
+# in this block is a check that the package actually delivered them: writing the
+# files unconditionally would keep working after the package stopped installing
+# them, and the gap would be invisible again.
+echo "== checking that the package that owns the base files delivered them"
+Missing=0
+for Wanted in bin/sh bin/bash etc/passwd etc/group etc/hostname etc/ld.so.conf \
+	etc/nsswitch.conf etc/os-release usr/lib/os-release; do
+	if [ -e "$InstallRoot/$Wanted" ] || [ -L "$InstallRoot/$Wanted" ]; then
+		echo "ok   /$Wanted"
+	else
+		echo "!!   /$Wanted was not installed by any package" >&2
+		Missing=$((Missing + 1))
 	fi
 done
-[ -e "$InstallRoot/bin/sh" ] || ln -sfn /usr/bin/bash "$InstallRoot/bin/sh"
-printf 'root:x:0:0:root:/root:/bin/bash\n' > "$InstallRoot/etc/passwd"
-printf 'root:x:0:\n' > "$InstallRoot/etc/group"
-printf 'okra\n' > "$InstallRoot/etc/hostname"
-
+[ "$Missing" -eq 0 ] || {
+	echo "verify-scheme-b: $Missing base files were not installed by a package" >&2
+	exit 1
+}
+# /bin used to be filled by copying /usr/bin into it, because nothing put a
+# shell there. app.base-files owns /bin/sh and /bin/bash now, so the copy would
+# only duplicate every binary in the tree.
+mkdir -p "$InstallRoot"/{proc,sys,dev,run,tmp,root}
 # The loader cache is what lets lunar start: its C++ runtime lives in /usr/lib64
 # and the loader only looks in /usr/lib by default. It is built here rather than
 # copied from the assembly, because this tree was made by the package manager
-# and the cache has to describe this tree.
-printf '/usr/lib64\n/usr/lib\n' > "$InstallRoot/etc/ld.so.conf"
+# and the cache has to describe this tree. ld.so.conf itself belongs to
+# app.base-files, so this does not rewrite it.
 Ldconfig=""
 for Candidate in "$InstallRoot/usr/sbin/ldconfig" "$InstallRoot/sbin/ldconfig"; do
 	[ -x "$Candidate" ] && { Ldconfig="$Candidate"; break; }

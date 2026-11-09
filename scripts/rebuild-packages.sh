@@ -136,6 +136,11 @@ echo "== fetching the sources"
 Fetched=0
 Unfetched=0
 for Package in "${ToBuild[@]}"; do
+	if grep -qx 'NoSource=1' "$WorkHost/packages/$Package.conf"; then
+		# A recipe that writes its payload itself has nothing to fetch, so it is
+		# not a source that went missing.
+		continue
+	fi
 	Url="$(sed -n 's/^Url=["]*\([^"]*\)["]*$/\1/p' "$WorkHost/packages/$Package.conf" | head -1)"
 	[ -n "$Url" ] || { echo "!! $Package has no Url in its recipe" >&2; Unfetched=$((Unfetched + 1)); continue; }
 	Name="$(basename "${Url%%\?*}")"
@@ -459,6 +464,8 @@ for Package in "${Packages[@]}"; do
 	# The source is already on disk, so the recipe's URL is pointed at it. Its
 	# sha256 still has to match, which is what keeps this from being a build of
 	# whatever happened to be lying around.
+	NoSource=0
+	grep -qx 'NoSource=1' "$Recipe" && NoSource=1
 	Url="$(sed -n 's/^Url=["]*\([^"]*\)["]*$/\1/p' "$Recipe" | head -1)"
 	Name="$(basename "${Url%%\?*}")"
 	# A source that the host had to unpack on the way in is on disk under a
@@ -468,14 +475,16 @@ for Package in "${Packages[@]}"; do
 	if [ -s "src/${Name%.lz}" ] && [ "${Name##*.}" = "lz" ]; then
 		Name="${Name%.lz}"
 	fi
-	if [ ! -s "src/$Name" ]; then
+	if [ "$NoSource" -eq 0 ] && [ ! -s "src/$Name" ]; then
 		echo "!! no source for $Package" >&2
 		Failed=$((Failed + 1)); FailedList+=("$Package"); continue
 	fi
-	sed -i "s|^Url=.*|Url=file:///usr/src/okra-packages/src/$Name|" "$Recipe"
+	if [ "$NoSource" -eq 0 ]; then
+		sed -i "s|^Url=.*|Url=file:///usr/src/okra-packages/src/$Name|" "$Recipe"
+	fi
 
 	echo "=============================================================="
-	echo "== building $Package from $Name"
+	if [ "$NoSource" -eq 1 ]; then echo "== building $Package, which needs no source"; else echo "== building $Package from $Name"; fi
 	if bash scripts/build-package.sh "$Package" > "logs/$Package.log" 2>&1; then
 		echo "ok   $Package  ($(du -sm "/tmp/okra-artifacts/$Package" 2>/dev/null | cut -f1) MB)"
 		Built=$((Built + 1))
