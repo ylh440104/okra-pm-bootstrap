@@ -38,9 +38,9 @@ try:
     data = json.load(sys.stdin)
 except Exception:
     sys.exit(1)
-names = [a["name"] for a in data.get("assets", []) if a["name"].endswith(".oaa")]
-for name in sorted(names):
-    print(name)
+for a in sorted(data.get("assets", []), key=lambda x: x["name"]):
+    if a["name"].endswith(".oaa"):
+        print(a["name"], a["id"])
 ' > "$Destination/names.txt"
 
 Count="$(wc -l < "$Destination/names.txt")"
@@ -50,8 +50,32 @@ echo "== $Count packages available"
 	exit 1
 }
 
+# FetchOne() - download the current $Name into $Target.
+# Return: 0 when the bytes are there.
+#
+# Two ways round, because the two fail independently. The release download URL
+# goes through the asset CDN, which returns 504 in bursts while api.github.com
+# keeps answering; the API asset endpoint is slower but lives on the host that
+# is still up. Retrying only the first one means a CDN having a bad minute
+# stops the whole run, which is what happened to automake.
+FetchOne() {
+	curl -fsSL -m 600 --retry 2 --retry-delay 3 --retry-all-errors \
+		-H "Authorization: token $Token" \
+		-o "$Target" \
+		"https://github.com/$SourceRepository/releases/download/$SourceRelease/$Name" && return 0
+	if [ -n "${AssetId:-}" ]; then
+		echo "== $Name: the release URL did not answer, trying the asset endpoint" >&2
+		curl -fsSL -m 600 --retry 2 --retry-delay 3 --retry-all-errors \
+			-H "Authorization: token $Token" \
+			-H 'Accept: application/octet-stream' \
+			-o "$Target" \
+			"https://api.github.com/repos/$SourceRepository/releases/assets/$AssetId" && return 0
+	fi
+	return 1
+}
+
 Downloaded=0
-while read -r Name; do
+while read -r Name AssetId; do
 	[ -n "$Name" ] || continue
 	Target="$Destination/$Name"
 
@@ -72,10 +96,7 @@ while read -r Name; do
 	Attempt=1
 	Delay=5
 	while [ "$Attempt" -le 6 ]; do
-		if curl -fsSL -m 600 --retry 2 --retry-delay 3 --retry-all-errors \
-			-H "Authorization: token $Token" \
-			-o "$Target" \
-			"https://github.com/$SourceRepository/releases/download/$SourceRelease/$Name" &&
+		if FetchOne &&
 			curl -fsSL -m 60 --retry 2 --retry-delay 3 --retry-all-errors \
 				-H "Authorization: token $Token" \
 				-o "$Target.sha256" \
@@ -92,7 +113,10 @@ while read -r Name; do
 		rm -f "$Target" "$Target.sha256"
 		Attempt=$((Attempt + 1))
 		sleep "$Delay"
+		# Capped: with the asset endpoint as the second way round, sitting out
+		# two minutes between attempts no longer buys anything.
 		Delay=$((Delay * 2))
+		[ "$Delay" -le 30 ] || Delay=30
 	done
 
 	[ -s "$Target" ] || {
