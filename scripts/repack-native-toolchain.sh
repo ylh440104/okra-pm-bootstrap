@@ -109,6 +109,17 @@ if not listing:
     print('the archive declares no files', file=sys.stderr)
     sys.exit(1)
 
+# The archive list is what the cross build declared, and it is missing some of
+# what a compiler is. gcc's C++ standard library headers are under
+# /usr/include/c++, they are installed by the same make install, and the cross
+# package never listed them - so the repack left them behind and the published
+# compiler could not compile a program that includes <vector>. They are added
+# here, from the same tree, rather than being left out again.
+for extra in ('/usr/include/c++',):
+    full = root + extra
+    if os.path.isdir(full) and extra not in listing:
+        listing.append(extra)
+
 # A directory entry covers everything below it, so the list is expanded against
 # the tree rather than against the archive.
 expanded = []
