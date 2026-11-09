@@ -351,4 +351,21 @@ jobs:
           du -ch "${Files[@]}" | tail -1
           [ "${#Files[@]}" -ge 60 ] || { echo "the repository looks incomplete" >&2; exit 1; }
           gh release upload "$Tag" "${Files[@]}" --clobber
+          # --clobber replaces what has the same name and leaves everything else in
+          # place, so an archive that stopped being produced stays in the release
+          # for ever: tzdata at 2025a sat there next to 2025.1 and a client could
+          # still fetch a package the index does not mention. Anything the new
+          # repository does not contain is removed.
+          mapfile -t Wanted < <(printf '%s\n' "${Files[@]}" | xargs -n1 basename | sort)
+          Deleted=0
+          while read -r Asset; do
+            [ -n "$Asset" ] || continue
+            if ! printf '%s\n' "${Wanted[@]}" | grep -qxF "$Asset"; then
+              echo "== removing $Asset, which the new repository does not contain"
+              gh release delete-asset "$Tag" "$Asset" --yes >/dev/null
+              Deleted=$((Deleted + 1))
+            fi
+          done < <(gh release view "$Tag" --json assets --jq '.assets[].name')
+          echo "== removed $Deleted stale assets"
+          gh release view "$Tag" --json assets --jq '.assets | length' 
           gh release view "$Tag" --json assets --jq '.assets | length'
