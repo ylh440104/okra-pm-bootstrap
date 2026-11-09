@@ -64,12 +64,20 @@ while read -r Name; do
 		continue
 	fi
 
+	# The download comes off a CDN in front of the release, and it returns 504
+	# often enough that three quick attempts is not enough: a run died on
+	# automake with three of them in a row. The backoff doubles instead, and
+	# the checksum is rechecked after every attempt, so a truncated file from
+	# a half dead connection is not mistaken for success either.
 	Attempt=1
-	while [ "$Attempt" -le 3 ]; do
-		if curl -fsSL -m 600 -H "Authorization: token $Token" \
+	Delay=5
+	while [ "$Attempt" -le 6 ]; do
+		if curl -fsSL -m 600 --retry 2 --retry-delay 3 --retry-all-errors \
+			-H "Authorization: token $Token" \
 			-o "$Target" \
 			"https://github.com/$SourceRepository/releases/download/$SourceRelease/$Name" &&
-			curl -fsSL -m 60 -H "Authorization: token $Token" \
+			curl -fsSL -m 60 --retry 2 --retry-delay 3 --retry-all-errors \
+				-H "Authorization: token $Token" \
 				-o "$Target.sha256" \
 				"https://github.com/$SourceRepository/releases/download/$SourceRelease/$Name.sha256"; then
 			Expected="$(awk 'NR == 1 {print $1}' "$Target.sha256" 2>/dev/null || true)"
@@ -79,11 +87,12 @@ while read -r Name; do
 			fi
 			echo "== $Name failed its checksum on attempt $Attempt, fetching again" >&2
 		else
-			echo "== $Name could not be fetched on attempt $Attempt" >&2
+			echo "== $Name could not be fetched on attempt $Attempt, waiting ${Delay}s" >&2
 		fi
 		rm -f "$Target" "$Target.sha256"
 		Attempt=$((Attempt + 1))
-		sleep 5
+		sleep "$Delay"
+		Delay=$((Delay * 2))
 	done
 
 	[ -s "$Target" ] || {
