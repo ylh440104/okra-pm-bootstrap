@@ -161,7 +161,7 @@ for line in open(sys.argv[1]):
         if ns and name:
             print("%s.%s" % (ns, name))
             ns = name = None
-' "$RepositoryDirectory/index.yaml")
+' "$RepositoryDirectory/index.yaml" | sort -u)
 [ "${#References[@]}" -gt 50 ] || {
 	kill "$ServerPid" 2>/dev/null || true
 	echo "install-published-userland: the repository offered too few packages" >&2
