@@ -82,6 +82,14 @@ AddOkrapm() {
 # also uses; keeping one copy means the two cannot drift apart.
 RenameToLunarNames() {
 	bash "$ScriptDirectory/rename-to-lunar.sh" "$OutputDirectory/artifacts"
+	local Leftover Removed=0
+	for Leftover in "$OutputDirectory"/artifacts/*.bootstrapped.oaa; do
+		[ -f "$Leftover" ] || continue
+		echo "== dropping $(basename "$Leftover"): the resolver cannot name it"
+		rm -f "$Leftover" "$Leftover.sha256"
+		Removed=$((Removed + 1))
+	done
+	[ "$Removed" -eq 0 ] || echo "== $Removed archives the resolver could not name were left out"
 }
 
 # AddMissingPackages() - build the two libraries the userland turned out not to
