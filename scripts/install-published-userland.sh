@@ -100,21 +100,36 @@ du -sh "$RepositoryDirectory/artifacts" | sed 's/^/   /'
 # The server builds index.yaml from the archives as it is asked for it, which
 # keeps the index and the contents from disagreeing.
 echo "== serving the repository"
-python3 "$ScriptDirectory/repo-server.py" --root "$RepositoryDirectory" --bind 127.0.0.1 --port 0 \
+# The port is chosen here and passed in rather than left to 0: the server prints
+# the number it was given, not the one it bound, so asking for 0 reports 0 and
+# the caller then tries to connect to port zero.
+RepoPort="$(python3 -c 'import socket
+s = socket.socket()
+s.bind(("127.0.0.1", 0))
+print(s.getsockname()[1])
+s.close()')"
+python3 "$ScriptDirectory/repo-server.py" \
+	--root "$RepositoryDirectory" --bind 127.0.0.1 --port "$RepoPort" \
 	> "$WorkRoot/repo-server.log" 2>&1 &
 ServerPid=$!
-RepoUrl=""
-for _ in $(seq 1 40); do
-	RepoUrl="$(sed -n 's/.*http:\/\/\(127\.0\.0\.1:[0-9]*\).*/http:\/\/\1/p' "$WorkRoot/repo-server.log" | head -1)"
-	[ -n "$RepoUrl" ] && break
-	sleep 0.5
+Answered=0
+for _ in $(seq 1 60); do
+	if curl -fsS "http://127.0.0.1:$RepoPort/index.yaml" >/dev/null 2>&1; then
+		Answered=1
+		break
+	fi
+	if ! kill -0 "$ServerPid" 2>/dev/null; then
+		break
+	fi
+	sleep 1
 done
-if [ -z "$RepoUrl" ]; then
+if [ "$Answered" -ne 1 ]; then
 	cat "$WorkRoot/repo-server.log" >&2
 	kill "$ServerPid" 2>/dev/null || true
 	echo "install-published-userland: the repository server never answered" >&2
 	exit 1
 fi
+RepoUrl="http://127.0.0.1:$RepoPort"
 echo "== repository at $RepoUrl"
 
 StateDirectory="$WorkRoot/state"
