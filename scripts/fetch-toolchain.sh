@@ -157,10 +157,40 @@ ReleaseBase="https://github.com/$SourceRepository/releases/download/$ReleaseTag"
 echo "== looking for the seed in the $ReleaseTag release"
 Archive="$ScratchDirectory/okra-cross-toolchain.tar.zst"
 ArchiveSum="$Archive.sha256"
-if curl -fsSL --retry 3 -m 1200 -H "Authorization: token $Token" \
-	-o "$Archive" "$ReleaseBase/okra-cross-toolchain.tar.zst" &&
-	curl -fsSL --retry 3 -m 1200 -H "Authorization: token $Token" \
-	-o "$ArchiveSum" "$ReleaseBase/okra-cross-toolchain.tar.zst.sha256"; then
+
+# FetchReleased() - download the seed from the release into $Archive.
+# Return: 0 when a tarball and its checksum are both on disk.
+#
+# It is published in parts because a release asset may not exceed 2 GiB and the
+# tarball is around 3.6. A single asset is tried first anyway: if the toolchain
+# ever becomes small enough to fit, nothing here has to change.
+FetchReleased() {
+	local Part Index
+	if curl -fsSL --retry 3 -m 1200 -H "Authorization: token $Token" \
+		-o "$ArchiveSum" "$ReleaseBase/okra-cross-toolchain.tar.zst.sha256"; then
+		if curl -fsSL --retry 3 -m 1800 -H "Authorization: token $Token" \
+			-o "$Archive" "$ReleaseBase/okra-cross-toolchain.tar.zst"; then
+			return 0
+		fi
+		: > "$Archive"
+		for Index in 00 01 02 03 04 05 06 07; do
+			Part="$ScratchDirectory/okra-cross-toolchain.tar.zst.part$Index"
+			if ! curl -fsSL --retry 3 -m 1800 -H "Authorization: token $Token" \
+				-o "$Part" "$ReleaseBase/okra-cross-toolchain.tar.zst.part$Index"; then
+				rm -f "$Part"
+				break
+			fi
+			echo "   fetched part$Index ($(du -m "$Part" | cut -f1) MB)"
+			cat "$Part" >> "$Archive" || return 1
+			rm -f "$Part"
+		done
+		[ -s "$Archive" ] || return 1
+		return 0
+	fi
+	return 1
+}
+
+if FetchReleased; then
 	Expected="$(awk '{print $1}' "$ArchiveSum")"
 	Actual="$(sha256sum "$Archive" | awk '{print $1}')"
 	if [ "$Expected" != "$Actual" ]; then
