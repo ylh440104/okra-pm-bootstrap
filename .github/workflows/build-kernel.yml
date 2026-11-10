@@ -109,6 +109,13 @@ jobs:
             cd /mnt
             export PATH=/usr/bin:/usr/sbin:/bin:/sbin
             export HOME=/tmp
+            # gawk in this rootfs loads libreadline, which wants tputs from
+            # libtinfo and does not find it, so every awk call dies with a symbol
+            # lookup error and the kernel build stops on the first generated
+            # header. Pointing ld at libtinfo is enough to get awk working, and
+            # awk takes no other part in a kernel build.
+            export LD_LIBRARY_PATH=/usr/lib:/lib
+            awk 'BEGIN { print "awk works" }'
             make -j4 olddefconfig >/dev/null
             make -j4 bzImage
           '
