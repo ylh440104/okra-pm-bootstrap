@@ -121,7 +121,25 @@ jobs:
           export JOBS=4
           # The kernel is the one from the release; do not try to build it.
           bash "$PROJECT_ROOT/live-build/scripts/build-kernel"
-          bash "$PROJECT_ROOT/live-build/scripts/build-squashfs"
+          # The kernel has ext4 built in and no squashfs support, so the live
+          # root is an ext4 image on a loop device rather than a squashfs.
+          mkdir -p "$ISO_ROOT/LiveOS"
+          rm -f "$ISO_ROOT/LiveOS/rootfs.ext4" "$ISO_ROOT/LiveOS/rootfs.squashfs"
+          truncate -s 6G "$ISO_ROOT/LiveOS/rootfs.ext4"
+          mkfs.ext4 -q -F -m 0 -O ^has_journal -L okra-rootfs \
+            "$ISO_ROOT/LiveOS/rootfs.ext4"
+          sudo mkdir -p /mnt/liveroot
+          sudo mount -o loop "$ISO_ROOT/LiveOS/rootfs.ext4" /mnt/liveroot
+          sudo cp -a "$ROOTFS/." /mnt/liveroot/
+          sudo umount /mnt/liveroot
+          # The image is shrunk to what it holds, so the ISO does not carry 6G
+          # of empty space. This needs the filesystem to be consistent, which
+          # is why it happens after the copy and not before.
+          sudo e2fsck -f -y "$ISO_ROOT/LiveOS/rootfs.ext4" >/dev/null || true
+          sudo resize2fs -M "$ISO_ROOT/LiveOS/rootfs.ext4"
+          sudo chown "$(id -u):$(id -g)" "$ISO_ROOT/LiveOS/rootfs.ext4"
+          echo "== the live root image"
+          ls -l "$ISO_ROOT/LiveOS/rootfs.ext4"
           # The initramfs tree in the repository is not usable as it stands:          # build-initramfs replaces bin/ with tools it installs itself and then          # copies the loader and the libraries in. Skipping that step is what
           # made the first ISO panic with "Failed to execute /init (error -2)" -
           # every binary in it is dynamically linked and there was nothing to
@@ -131,6 +149,12 @@ jobs:
           # libmount under /lib in this early root. Tell the dynamic loader to
           # search the standard library locations explicitly before /init runs.
           sed -i '/^export PATH=\/bin:\/usr\/bin:\/sbin:\/usr\/sbin$/a export LD_LIBRARY_PATH=\/lib:\/lib64:\/usr\/lib:\/usr\/lib64' "$INITRAMFS_TREE/init"
+          # The init looks for rootfs.squashfs and mounts it as squashfs. This
+          # kernel has no squashfs, so it takes rootfs.ext4 as well, through a
+          # loop device, and the loop driver has to be loaded first.
+          python3 "$GITHUB_WORKSPACE/scripts/patch-livecd-init.py" \
+            "$INITRAMFS_TREE/init"
+
           rm -rf "$INITRAMFS_TREE/bin"
           mkdir -p "$INITRAMFS_TREE/bin"
 
@@ -201,6 +225,7 @@ jobs:
         run: |
           set -euo pipefail
           ISO="$RUNNER_TEMP/okra-linux.iso"
+          xorriso -indev "$ISO" -find / -name 'rootfs.ext4' -exec lsdl 2>/dev/null | head -3
           xorriso -indev "$ISO" -find / -name 'rootfs.squashfs' -exec lsdl 2>/dev/null | head -3
           xorriso -indev "$ISO" -find /boot -name 'vmlinuz' -exec lsdl 2>/dev/null | head -3
           xorriso -indev "$ISO" -find /boot -name 'initramfs-live.img' -exec lsdl 2>/dev/null | head -3
