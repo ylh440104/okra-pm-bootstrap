@@ -44,7 +44,10 @@ Patch() {
 	if [ "$Found" -eq 0 ]; then
 		echo "patch-okrapm: $1 no longer contains the pattern, so it may be fixed upstream" >&2
 		echo "               looking for: $From" >&2
-		return 1
+		# The pattern being gone means upstream fixed it, so the reason this
+		# patch exists is gone too. Treating that as failure would make every
+		# later run stop on a package manager that has moved on.
+		return 0
 	fi
 	if [ "$Found" -ne "$Expected" ]; then
 		echo "patch-okrapm: $1 has $Found of the pattern, expected $Expected" >&2
