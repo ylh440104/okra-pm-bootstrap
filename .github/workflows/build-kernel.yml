@@ -119,7 +119,11 @@ jobs:
           export LD_LIBRARY_PATH=/usr/lib:/lib
           printf 'x\n' | awk '{ print "awk works", $1 }'
           make -j4 olddefconfig >/dev/null
-          make -j4 bzImage
+          # olddefconfig puts UNWINDER_ORC back, because x86_64 selects it, and
+          # objtool then wants gelf.h from elfutils which this system does not
+          # ship. Ask make to skip the tool rather than fight the config: nothing
+          # the live image needs comes out of it.
+          make -j4 bzImage OBJTOOL=/bin/true 
           INSIDE
           sudo install -m755 "$RUNNER_TEMP/build-kernel-inside.sh" \
             "$ROOTFS/tmp/build-kernel-inside.sh"
