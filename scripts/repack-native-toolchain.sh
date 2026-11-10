@@ -115,7 +115,7 @@ if not listing:
 # package never listed them - so the repack left them behind and the published
 # compiler could not compile a program that includes <vector>. They are added
 # here, from the same tree, rather than being left out again.
-for extra in ('/usr/include/c++',):
+for extra in ('/usr/include', '/usr/include/c++', '/usr/lib/pkgconfig', '/usr/share/pkgconfig'):
     full = root + extra
     if os.path.isdir(full) and extra not in listing:
         listing.append(extra)
