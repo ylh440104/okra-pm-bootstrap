@@ -1,0 +1,109 @@
+name: Look at how readline is linked
+
+# awk cannot start inside the installed system:
+#
+#   awk: symbol lookup error: /usr/lib/libreadline.so.8: undefined symbol: tputs
+#
+# readline declares ncurses as a dependency and libtinfo.so.6 is in the
+# repository, so either the shared object does not name libtinfo at all, or it
+# names it and loads a different file than the one carrying tputs. This prints
+# the evidence instead of guessing, and costs one minute.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  inspect:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install what the build needs
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            cmake patchelf patch tar xz-utils zstd gzip bzip2 lzip file rsync \
+            python3 wget curl ca-certificates git unzip
+
+      - name: Fetch the oaa toolkit
+        run: |
+          set -euo pipefail
+          git clone -q --depth 1 --branch fix/version-suffix \
+            "https://github.com/ylh440104/okrapm.git" vendor/okrapm
+          ./scripts/patch-okrapm.sh vendor/okrapm
+
+      - name: Build the host lunar
+        run: |
+          set -euo pipefail
+          cmake -S vendor/okrapm -B "$RUNNER_TEMP/okrapm-build" \
+            -DCMAKE_BUILD_TYPE=Release >/dev/null
+          cmake --build "$RUNNER_TEMP/okrapm-build" -j4 --target lunar >/dev/null
+          mkdir -p "$RUNNER_TEMP/host-lunar"
+          cp "$RUNNER_TEMP/okrapm-build/src/lunar/lunar" "$RUNNER_TEMP/host-lunar/lunar"
+
+      - name: Install the published userland
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          ./scripts/install-published-userland.sh \
+            "$RUNNER_TEMP/okra-rootfs" \
+            "$RUNNER_TEMP/host-lunar/lunar" \
+            repo
+
+      - name: Read the linkage
+        run: |
+          set -uo pipefail
+          R="$RUNNER_TEMP/okra-rootfs"
+          echo "== libreadline.so.8 asks for"
+          readelf -d "$R/usr/lib/libreadline.so.8" | grep -E 'NEEDED|SONAME' || echo '   (readelf found nothing)'
+          echo
+          echo "== what libtinfo files exist"
+          ls -l "$R"/usr/lib/libtinfo.so* 2>/dev/null || echo '   none under usr/lib'
+          echo
+          echo "== does any of them define tputs"
+          for Library in "$R"/usr/lib/libtinfo.so.6*; do
+            [ -e "$Library" ] || continue
+            printf '%s: ' "$(basename "$Library")"
+            nm -D --defined-only "$Library" 2>/dev/null | grep -cw tputs || echo 0
+          done
+          echo
+          echo "== and does libncurses carry it instead"
+          nm -D --defined-only "$R/usr/lib/libncurses.so.6" 2>/dev/null | grep -cw tputs || echo '   no libncurses.so.6 with tputs'
+          echo
+          echo "== the loader view, from inside the rootfs"
+          sudo chroot "$R" /bin/bash -c 'ldd /usr/bin/gawk' || true
+          echo
+          echo "== try awk with libtinfo asked for by name"
+          sudo chroot "$R" /bin/bash -c 'LD_PRELOAD=/usr/lib/libtinfo.so.6 awk "BEGIN { print \"awk works\" }"' 2>&1 | tail -5 || true
+
+      - name: Copy the library details out
+        if: always()
+        run: |
+          set -uo pipefail
+          R="$RUNNER_TEMP/okra-rootfs"
+          {
+            echo "=== readelf -d libreadline.so.8"
+            readelf -d "$R/usr/lib/libreadline.so.8" 2>&1 || true
+            echo "=== readelf -d libtinfo.so.6"
+            readelf -d "$R/usr/lib/libtinfo.so.6" 2>&1 || true
+            echo "=== tputs in every library that might carry it"
+            for Library in "$R"/usr/lib/*.so.6 "$R"/usr/lib/*.so.8; do
+              [ -e "$Library" ] || continue
+              Count=$(nm -D --defined-only "$Library" 2>/dev/null | grep -cw tputs || true)
+              [ "${Count:-0}" != 0 ] && echo "$(basename "$Library") defines tputs"
+            done
+          } > "$RUNNER_TEMP/linkage.txt" 2>&1
+          cat "$RUNNER_TEMP/linkage.txt"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: readline-linkage
+          path: ${{ runner.temp }}/linkage.txt
+          if-no-files-found: warn
+          retention-days: 7
