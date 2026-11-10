@@ -115,7 +115,7 @@ jobs:
             # header. Pointing ld at libtinfo is enough to get awk working, and
             # awk takes no other part in a kernel build.
             export LD_LIBRARY_PATH=/usr/lib:/lib
-            awk 'BEGIN { print "awk works" }'
+            printf 'x\n' | awk '{ print "awk works", $1 }'
             make -j4 olddefconfig >/dev/null
             make -j4 bzImage
           '
