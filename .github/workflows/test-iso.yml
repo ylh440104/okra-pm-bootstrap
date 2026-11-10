@@ -44,6 +44,29 @@ jobs:
           ls -l "$RUNNER_TEMP/okra-linux.iso"
           file "$RUNNER_TEMP/okra-linux.iso" || true
 
+      - name: Boot the kernel and the initramfs directly
+        env:
+          SECONDS_TO_RUN: ${{ github.event.inputs.seconds }}
+        run: |
+          set -uo pipefail
+          # Take the two files out of the ISO and hand them to QEMU, so grub is
+          # not in the picture. If this boots, the initramfs is fine and the
+          # fault is in how grub passes it; if it does not, the initramfs or the
+          # kernel is the problem. Either answer halves the search.
+          xorriso -osirrox on -indev "$RUNNER_TEMP/okra-linux.iso" \
+            -extract /boot/vmlinuz "$RUNNER_TEMP/vmlinuz" \
+            -extract /boot/initramfs-live.img "$RUNNER_TEMP/initrd.img" 2>/dev/null || true
+          ls -l "$RUNNER_TEMP/vmlinuz" "$RUNNER_TEMP/initrd.img" || exit 0
+          timeout $(( ${SECONDS_TO_RUN:-600} / 2 )) qemu-system-x86_64 \
+            -m "${MEMORY:-2048}" -smp 2 -accel tcg \
+            -kernel "$RUNNER_TEMP/vmlinuz" -initrd "$RUNNER_TEMP/initrd.img" \
+            -append "console=ttyS0,115200n8 loglevel=7 ignore_loglevel rd.live.image" \
+            -display none -serial stdio -no-reboot \
+            > "$RUNNER_TEMP/direct.log" 2>&1 || true
+          echo "== direct boot: $(wc -l < "$RUNNER_TEMP/direct.log") lines"
+          grep -nE 'Unpacking initramfs|LiveCD init|found rootfs|mount squashfs|switch_root|Kernel panic|No working init' \
+            "$RUNNER_TEMP/direct.log" | tail -20 || echo '   (nothing matched)'
+
       - name: Boot it and keep the serial log
         env:
           SECONDS_TO_RUN: ${{ github.event.inputs.seconds }}
@@ -90,6 +113,8 @@ jobs:
         if: always()
         with:
           name: okra-iso-serial-log
-          path: ${{ runner.temp }}/serial.log
+          path: |
+            ${{ runner.temp }}/serial.log
+            ${{ runner.temp }}/direct.log
           if-no-files-found: warn
           retention-days: 14
