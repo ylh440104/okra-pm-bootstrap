@@ -104,21 +104,25 @@ jobs:
           sudo mount -t proc proc "$ROOTFS/proc" 2>/dev/null || true
           sudo mount -t sysfs sysfs "$ROOTFS/sys" 2>/dev/null || true
           sudo mount -t devtmpfs devtmpfs "$ROOTFS/dev" 2>/dev/null || true
-          sudo chroot "$ROOTFS" /bin/bash -c '
-            set -euxo pipefail
-            cd /mnt
-            export PATH=/usr/bin:/usr/sbin:/bin:/sbin
-            export HOME=/tmp
-            # gawk in this rootfs loads libreadline, which wants tputs from
-            # libtinfo and does not find it, so every awk call dies with a symbol
-            # lookup error and the kernel build stops on the first generated
-            # header. Pointing ld at libtinfo is enough to get awk working, and
-            # awk takes no other part in a kernel build.
-            export LD_LIBRARY_PATH=/usr/lib:/lib
-            printf 'x\n' | awk '{ print "awk works", $1 }'
-            make -j4 olddefconfig >/dev/null
-            make -j4 bzImage
-          '
+          # The body goes into a file. Handing it over inline put the shell in
+          # charge of the quoting twice: first the awk program lost its quotes
+          # and awk saw the word BEGIN as its whole program, then $1 inside it
+          # was expanded by the outer shell and the build died on an unbound
+          # variable. A file has no quoting to get wrong.
+          cat > "$RUNNER_TEMP/build-kernel-inside.sh" <<'INSIDE'
+          set -euxo pipefail
+          cd /mnt
+          export PATH=/usr/bin:/usr/sbin:/bin:/sbin
+          export HOME=/tmp
+          # tputs lives in libtinfo, and readline wants it when awk loads.
+          export LD_LIBRARY_PATH=/usr/lib:/lib
+          printf 'x\n' | awk '{ print "awk works", $1 }'
+          make -j4 olddefconfig >/dev/null
+          make -j4 bzImage
+          INSIDE
+          sudo install -m755 "$RUNNER_TEMP/build-kernel-inside.sh" \
+            "$ROOTFS/tmp/build-kernel-inside.sh"
+          sudo chroot "$ROOTFS" /bin/bash /tmp/build-kernel-inside.sh
           sudo cp "$RUNNER_TEMP/kernel/arch/x86/boot/bzImage" "$RUNNER_TEMP/bzImage"
           ls -l "$RUNNER_TEMP/bzImage"
 
