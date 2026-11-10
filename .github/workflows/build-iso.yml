@@ -89,6 +89,10 @@ jobs:
             "$RUNNER_TEMP/okra-rootfs" \
             "$RUNNER_TEMP/host-lunar/lunar" \
             repo
+          # lunar installs as the user who ran it, so the tree comes out owned by
+          # runner. In the image that is wrong twice over: systemd expects root
+          # to own the files it starts, and every setuid binary stops being one.
+          sudo chown -R 0:0 "$RUNNER_TEMP/okra-rootfs"
 
       - name: Put the kernel where the LiveCD scripts look for it
         env:
@@ -134,7 +138,7 @@ jobs:
             install -Dm755 "$ROOTFS$Source" "$INITRAMFS_TREE/bin/$Tool"
             # Ask the rootfs what each binary needs, so the paths are the ones
             # that will exist inside the initramfs.
-            chroot "$ROOTFS" ldd "$Source" 2>/dev/null |
+            sudo chroot "$ROOTFS" ldd "$Source" 2>/dev/null |
               awk '{ for (Index = 1; Index <= NF; Index++) if ($Index ~ /^\//) print $Index }' |
               sort -u | while read -r Library; do
                 [ -f "$ROOTFS$Library" ] && install -Dm755 "$ROOTFS$Library" "$INITRAMFS_TREE$Library"
