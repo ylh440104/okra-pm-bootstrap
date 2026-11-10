@@ -1,0 +1,95 @@
+name: Boot the ISO in QEMU
+
+# The hosted runners have no nested virtualisation, so this runs QEMU with TCG:
+# every instruction is translated, and a real boot takes minutes rather than
+# seconds. That is enough to answer the one question the build cannot - does the
+# thing start - and the serial log says where it stopped.
+#
+# It downloads the ISO that was published rather than building another one, so
+# an answer costs about ten minutes instead of forty.
+on:
+  workflow_dispatch:
+    inputs:
+      seconds:
+        description: 'How long to let the machine run'
+        required: false
+        default: '600'
+      memory:
+        description: 'Guest memory in MB'
+        required: false
+        default: '2048'
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  boot:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - name: Install QEMU
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends qemu-system-x86
+
+      - name: Fetch the ISO
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          curl -fsSL --retry 3 -m 900 -H "Authorization: token $GH_TOKEN" \
+            -o "$RUNNER_TEMP/okra-linux.iso" \
+            "https://github.com/ylh440104/okra-pm-bootstrap/releases/download/okra-linux-iso/okra-linux.iso"
+          ls -l "$RUNNER_TEMP/okra-linux.iso"
+          file "$RUNNER_TEMP/okra-linux.iso" || true
+
+      - name: Boot it and keep the serial log
+        env:
+          SECONDS_TO_RUN: ${{ github.event.inputs.seconds }}
+          MEMORY: ${{ github.event.inputs.memory }}
+        run: |
+          set -uo pipefail
+          # -display none keeps this headless, so everything that matters has to
+          # arrive on the serial port. -no-reboot stops a crash loop from
+          # overwriting the interesting part of the log.
+          timeout "${SECONDS_TO_RUN:-600}" qemu-system-x86_64 \
+            -m "${MEMORY:-2048}" -smp 2 -accel tcg \
+            -cdrom "$RUNNER_TEMP/okra-linux.iso" -boot d \
+            -display none -serial stdio -no-reboot \
+            > "$RUNNER_TEMP/serial.log" 2>&1 || true
+          echo "== $(wc -l < "$RUNNER_TEMP/serial.log") lines of serial output"
+          echo
+          echo "== the milestones, if any"
+          grep -nE 'LiveCD init|found rootfs|mount squashfs|overlay|switch_root|systemd|Reached target|Freezing|Kernel panic|Not syncing|error|failed' \
+            "$RUNNER_TEMP/serial.log" | tail -40 || echo '   (nothing matched)'
+          echo
+          echo "== the last 40 lines"
+          tail -40 "$RUNNER_TEMP/serial.log" || true
+
+      - name: Say what happened
+        if: always()
+        run: |
+          set -uo pipefail
+          LOG="$RUNNER_TEMP/serial.log"
+          [ -f "$LOG" ] || { echo "no serial log was produced"; exit 0; }
+          if grep -q 'Reached target' "$LOG"; then
+            echo "RESULT: systemd reached a target - the system booted"
+            grep -c 'Reached target' "$LOG" | sed 's/^/  targets reached: /'
+          elif grep -qE 'Kernel panic|Not syncing' "$LOG"; then
+            echo "RESULT: the kernel panicked"
+            grep -nE 'Kernel panic|Not syncing' "$LOG" | head -3
+          elif grep -q 'LiveCD init' "$LOG"; then
+            echo "RESULT: the initramfs init ran, and the system did not get past it"
+            grep -n 'LiveCD init' "$LOG" | tail -5
+          else
+            echo "RESULT: the serial log has no init output at all - the kernel may not have started, or it does not write to ttyS0"
+          fi
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: okra-iso-serial-log
+          path: ${{ runner.temp }}/serial.log
+          if-no-files-found: warn
+          retention-days: 14
