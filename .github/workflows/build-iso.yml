@@ -127,6 +127,10 @@ jobs:
           # every binary in it is dynamically linked and there was nothing to
           # link against.
           INITRAMFS_TREE="$PROJECT_ROOT/live-build/initramfs"
+          # The loader runs bash successfully, but mount still cannot see
+          # libmount under /lib in this early root. Tell the dynamic loader to
+          # search the standard library locations explicitly before /init runs.
+          sed -i '/^export PATH=\/bin:\/usr\/bin:\/sbin:\/usr\/sbin$/a export LD_LIBRARY_PATH=\/lib:\/lib64:\/usr\/lib:\/usr\/lib64' "$INITRAMFS_TREE/init"
           rm -rf "$INITRAMFS_TREE/bin"
           mkdir -p "$INITRAMFS_TREE/bin"
 
