@@ -110,6 +110,12 @@ jobs:
           set -euo pipefail
           # Only the archives that were just built go in. Everything else in
           # repo/artifacts came from the release this run started from.
+          # The build names its archives after the recipe; the resolver asks for
+          # <namespace>.<name>@<version>.oaa. This is the same rename scheme-b
+          # runs, and without it the index and the files disagree: every package
+          # published from here could not be fetched by the name it was listed
+          # under, which is what stopped an install at app.markupsafe.
+          bash ./scripts/rename-to-lunar.sh "$RUNNER_TEMP/okra-rebuilt"
           Found=0
           for Archive in "$RUNNER_TEMP"/okra-rebuilt/*.oaa; do
             [ -f "$Archive" ] || continue
