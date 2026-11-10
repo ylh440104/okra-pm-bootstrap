@@ -53,9 +53,13 @@ jobs:
           # not in the picture. If this boots, the initramfs is fine and the
           # fault is in how grub passes it; if it does not, the initramfs or the
           # kernel is the problem. Either answer halves the search.
-          xorriso -osirrox on -indev "$RUNNER_TEMP/okra-linux.iso" \
-            -extract /boot/vmlinuz "$RUNNER_TEMP/vmlinuz" \
-            -extract /boot/initramfs-live.img "$RUNNER_TEMP/initrd.img" 2>/dev/null || true
+          sudo mkdir -p /mnt/isocheck
+          sudo mount -o loop,ro "$RUNNER_TEMP/okra-linux.iso" /mnt/isocheck
+          cp -f /mnt/isocheck/boot/vmlinuz "$RUNNER_TEMP/vmlinuz"
+          cp -f /mnt/isocheck/boot/initramfs-live.img "$RUNNER_TEMP/initrd.img"
+          echo "== what the kernel will be handed as /init"
+          gzip -dc "$RUNNER_TEMP/initrd.img" | cpio -it 2>/dev/null | grep -xE 'init|bin/sh' || echo "   init is NOT in the archive"
+          sudo umount /mnt/isocheck
           ls -l "$RUNNER_TEMP/vmlinuz" "$RUNNER_TEMP/initrd.img" || exit 0
           timeout $(( ${SECONDS_TO_RUN:-600} / 2 )) qemu-system-x86_64 \
             -m "${MEMORY:-2048}" -smp 2 -accel tcg \
