@@ -55,7 +55,9 @@ jobs:
       - name: Fetch the oaa toolkit
         run: |
           set -euo pipefail
-          git clone -q --depth 1 --branch main \
+          # The same branch scheme-b builds: its main is behind upstream, and the
+          # opsis source patch-okrapm.sh needs is not in it.
+          git clone -q --depth 1 --branch fix/version-suffix \
             "https://github.com/ylh440104/okrapm.git" vendor/okrapm
           ./scripts/patch-okrapm.sh vendor/okrapm
 
