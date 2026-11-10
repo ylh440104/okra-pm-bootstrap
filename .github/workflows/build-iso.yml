@@ -1,0 +1,175 @@
+name: Build a bootable ISO
+
+# The userland comes from the repository the bootstrap published, so the ISO
+# carries exactly what scheme-b produced. The kernel comes from the okra-userland
+# release, which is the tree the LiveCD pipeline has always used.
+#
+# The three pieces are:
+#   rootfs      installed from the published repository by lunar, the same way
+#               the verification step does it
+#   squashfs    built by the okra-linux pipeline's own build-squashfs
+#   initramfs   the okra-linux pipeline's initramfs tree, packed as-is
+#
+# The ISO itself is assembled with grub-mkrescue rather than the pipeline's
+# Limine call, because Limine ships source only and the boot sector files in
+# that repository came from a build whose version is not recorded. Mismatched
+# pieces there produce an ISO that does not start, which is a bad way to find
+# out. grub-mkrescue brings its own boot code for both BIOS and UEFI.
+#
+# What this does not do: pack the installer. build-initramfs also builds the
+# OKRAINSTALL payload and an EFI image for the installed disk, and it insists on
+# a GRUB theme from a path on one developer's machine. Neither is needed to get
+# the system to start.
+on:
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: 'Attach the ISO to a release'
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+  actions: read
+
+env:
+  OKRA_TARGET_TRIPLE: x86_64-okra-linux-gnu
+  OKRA_LINUX_REPOSITORY: FORGE24/okra-linux
+
+jobs:
+  iso:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install what the build needs
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            cmake patchelf patch tar xz-utils zstd gzip bzip2 lzip file rsync \
+            python3 wget curl ca-certificates git unzip \
+            cpio squashfs-tools xorriso mtools dosfstools \
+            grub-pc-bin grub-efi-amd64-bin
+
+      - name: Fetch the oaa toolkit
+        run: |
+          set -euo pipefail
+          git clone -q --depth 1 --branch main \
+            "https://github.com/ylh440104/okrapm.git" vendor/okrapm
+          ./scripts/patch-okrapm.sh vendor/okrapm
+
+      - name: Fetch the LiveCD pipeline
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          git clone -q --depth 1 \
+            "https://x-access-token:${GH_TOKEN}@github.com/$OKRA_LINUX_REPOSITORY.git" \
+            "$GITHUB_WORKSPACE/okra-linux"
+          ls "$GITHUB_WORKSPACE/okra-linux/live-build/scripts"
+
+      - name: Build the host lunar
+        run: |
+          set -euo pipefail
+          cmake -S vendor/okrapm -B "$RUNNER_TEMP/okrapm-build" \
+            -DCMAKE_BUILD_TYPE=Release >/dev/null
+          cmake --build "$RUNNER_TEMP/okrapm-build" -j4 --target lunar >/dev/null
+          mkdir -p "$RUNNER_TEMP/host-lunar"
+          cp "$RUNNER_TEMP/okrapm-build/src/lunar/lunar" "$RUNNER_TEMP/host-lunar/lunar"
+
+      - name: Install the published userland as the rootfs
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          ./scripts/install-published-userland.sh \
+            "$RUNNER_TEMP/okra-rootfs" \
+            "$RUNNER_TEMP/host-lunar/lunar" \
+            repo
+
+      - name: Put the kernel where the LiveCD scripts look for it
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          # build-kernel reuses an existing bzImage instead of compiling one, so
+          # a kernel tree with nothing but the image in it is enough.
+          mkdir -p "$RUNNER_TEMP/kernel/arch/x86/boot"
+          touch "$RUNNER_TEMP/kernel/.config"
+          for Name in bzImage; do
+            curl -fsSL --retry 3 -m 600 -H "Authorization: token $GH_TOKEN" \
+              -o "$RUNNER_TEMP/kernel/arch/x86/boot/$Name" \
+              "https://github.com/ylh440104/okra-oaa-packages-x86_64/releases/download/okra-userland/$Name"
+          done
+          ls -l "$RUNNER_TEMP/kernel/arch/x86/boot/bzImage"
+          file "$RUNNER_TEMP/kernel/arch/x86/boot/bzImage" || true
+
+      - name: Build the LiveCD pieces
+        run: |
+          set -euo pipefail
+          export PROJECT_ROOT="$GITHUB_WORKSPACE/okra-linux"
+          export ROOTFS="$RUNNER_TEMP/okra-rootfs"
+          export KERNEL_TREE="$RUNNER_TEMP/kernel"
+          export ISO_ROOT="$PROJECT_ROOT/live-build/iso-root"
+          export JOBS=4
+          # The kernel is the one from the release; do not try to build it.
+          bash "$PROJECT_ROOT/live-build/scripts/build-kernel"
+          bash "$PROJECT_ROOT/live-build/scripts/build-squashfs"
+          # The initramfs tree is committed and complete; packing it is the last
+          # thing build-initramfs does, and it is the only part this needs.
+          ( cd "$PROJECT_ROOT/live-build/initramfs" \
+            && find . -print0 | cpio --null -o -H newc 2>/dev/null | gzip -9 ) \
+            > "$ISO_ROOT/boot/initramfs-live.img"
+          ls -l "$ISO_ROOT/boot/" "$ISO_ROOT/LiveOS/"
+
+      - name: Assemble the ISO
+        run: |
+          set -euo pipefail
+          export PROJECT_ROOT="$GITHUB_WORKSPACE/okra-linux"
+          export ISO_ROOT="$PROJECT_ROOT/live-build/iso-root"
+          export ISO_IMAGE="$RUNNER_TEMP/okra-linux.iso"
+          mkdir -p "$ISO_ROOT/boot/grub"
+          cat > "$ISO_ROOT/boot/grub/grub.cfg" <<'GRUBCFG'
+          set timeout=5
+          set default=0
+          insmod all_video
+          insmod gfxterm
+          terminal_output gfxterm
+          menuentry "Okra Linux" {
+              linux /boot/vmlinuz console=tty0 console=ttyS0,115200n8 nomodeset loglevel=6 systemd.show_status=yes rd.live.image
+              initrd /boot/initramfs-live.img
+          }
+          GRUBCFG
+          grub-mkrescue -o "$ISO_IMAGE" "$ISO_ROOT" \
+            -- -volid OKRALINUX_BASE0 2>&1 | tail -12
+          ls -l "$ISO_IMAGE"
+          du -h "$ISO_IMAGE"
+
+      - name: Check the ISO carries what the initramfs looks for
+        run: |
+          set -euo pipefail
+          ISO="$RUNNER_TEMP/okra-linux.iso"
+          xorriso -indev "$ISO" -find / -name 'rootfs.squashfs' -exec lsdl 2>/dev/null | head -3
+          xorriso -indev "$ISO" -find /boot -name 'vmlinuz' -exec lsdl 2>/dev/null | head -3
+          xorriso -indev "$ISO" -find /boot -name 'initramfs-live.img' -exec lsdl 2>/dev/null | head -3
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: okra-linux-iso
+          path: ${{ runner.temp }}/okra-linux.iso
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Attach the ISO to a release
+        if: ${{ github.event.inputs.publish == 'true' }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          Tag=okra-linux-iso
+          gh release view "$Tag" >/dev/null 2>&1 || gh release create "$Tag" \
+            --title "Okra Linux ISO" \
+            --notes "A bootable ISO built from the userland the bootstrap published. The root filesystem is the repository installed by lunar; the kernel is the one the LiveCD pipeline has always used; the ISO is assembled with grub-mkrescue."
+          gh release upload "$Tag" "$RUNNER_TEMP/okra-linux.iso" --clobber
+          gh release view "$Tag" --json assets --jq '.assets[] | "\(.name) \(.size)"'
