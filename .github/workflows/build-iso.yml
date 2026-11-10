@@ -152,7 +152,9 @@ jobs:
           done
           ln -sfn bash "$INITRAMFS_TREE/bin/sh"
           echo "== the initramfs now holds"
-          find "$INITRAMFS_TREE" -type f | head -30
+          # No pipe to head here: find is killed by SIGPIPE when head exits, and
+          # with pipefail on that fails the step.
+          find "$INITRAMFS_TREE" -type f -printf '   %P\n' | sed -n '1,30p' || true
           ( cd "$INITRAMFS_TREE" && find . -print0 | cpio --null -o -H newc 2>/dev/null | gzip -9 ) \
             > "$ISO_ROOT/boot/initramfs-live.img"
           ls -l "$ISO_ROOT/boot/" "$ISO_ROOT/LiveOS/"
