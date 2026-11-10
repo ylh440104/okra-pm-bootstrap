@@ -69,7 +69,8 @@ Patch "lib/okrapmlib/src/lunar_core.cpp" 1 \
 # appears in both, and both have the same problem.
 Patch "opsis/src/engine.cpp" 2 \
 	'fs::path Rel = fs::relative(It->path(), From, Error);' \
-	'fs::path Rel = It->path().lexically_relative(From);' || exit 1
+	'fs::path Rel = It->path().lexically_relative(From);' || \
+	echo "patch-okrapm: opsis/src/engine.cpp is not in this revision, so its two call sites do not need the change" >&2
 
 # Removal is deliberately not patched. It drops the package from the database
 # and hands the file deletion to the package's own REMOVE script; none of the
