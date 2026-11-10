@@ -138,18 +138,20 @@ jobs:
             [ -n "$Source" ] || { echo "missing $Tool in the rootfs" >&2; exit 1; }
             install -Dm755 "$ROOTFS$Source" "$INITRAMFS_TREE/bin/$Tool"
           done
-          # Every top level library the rootfs has, rather than what ldd
-          # says each tool needs: ldd left libmount out, and mount is the
-          # first thing the init runs, so the initramfs died on the first
-          # line with "libmount.so.1: cannot open shared object file".
+          # /lib is a symlink to usr/lib in this rootfs, and find does not
+          # follow symlinks, so asking it for /lib/*.so* returned nothing and
+          # libmount never made it into the image. A shell glob goes through
+          # the link, and cp -a keeps it a link.
           for Directory in lib lib64 usr/lib usr/lib64; do
-            [ -d "$ROOTFS/$Directory" ] || continue
-            find "$ROOTFS/$Directory" -maxdepth 1 -name "*.so*" -type f \
-              -o -maxdepth 1 -name "*.so*" -type l | while read -r Library; do
-                Relative="${Library#"$ROOTFS"}"
-                install -Dm755 "$Library" "$INITRAMFS_TREE$Relative"
+            for Library in "$ROOTFS/$Directory"/*.so*; do
+              [ -e "$Library" ] || continue
+              Relative="${Library#"$ROOTFS"}"
+              mkdir -p "$INITRAMFS_TREE$(dirname "$Relative")"
+              cp -a "$Library" "$INITRAMFS_TREE$Relative"
+            done
           done
-          done
+          echo "== loader and libraries in the initramfs"
+          ls -l "$INITRAMFS_TREE/lib" "$INITRAMFS_TREE/lib64" 2>/dev/null || true
           ln -sfn bash "$INITRAMFS_TREE/bin/sh"
           echo "== the initramfs now holds"
           # No pipe to head here: find is killed by SIGPIPE when head exits, and
