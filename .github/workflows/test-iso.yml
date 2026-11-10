@@ -59,6 +59,8 @@ jobs:
           cp -f /mnt/isocheck/boot/initramfs-live.img "$RUNNER_TEMP/initrd.img"
           echo "== what the kernel will be handed as /init"
           gzip -dc "$RUNNER_TEMP/initrd.img" | cpio -it 2>/dev/null | grep -xE 'init|bin/sh' || echo "   init is NOT in the archive"
+          echo "== every library path recorded in the archive"
+          gzip -dc "$RUNNER_TEMP/initrd.img" | cpio -it 2>/dev/null | grep -E 'libmount|ld-linux|libc\.so|libblkid' || echo "   none of them are in the archive"
           sudo umount /mnt/isocheck
           ls -l "$RUNNER_TEMP/vmlinuz" "$RUNNER_TEMP/initrd.img" || exit 0
           timeout $(( ${SECONDS_TO_RUN:-600} / 2 )) qemu-system-x86_64 \
