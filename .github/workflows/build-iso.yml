@@ -129,6 +129,7 @@ jobs:
           INITRAMFS_TREE="$PROJECT_ROOT/live-build/initramfs"
           rm -rf "$INITRAMFS_TREE/bin"
           mkdir -p "$INITRAMFS_TREE/bin"
+
           for Tool in ln cat rm cp chmod mkdir sleep readlink bash mount umount switch_root; do
             Source=""
             for Directory in usr/bin usr/sbin bin sbin; do
@@ -136,13 +137,18 @@ jobs:
             done
             [ -n "$Source" ] || { echo "missing $Tool in the rootfs" >&2; exit 1; }
             install -Dm755 "$ROOTFS$Source" "$INITRAMFS_TREE/bin/$Tool"
-            # Ask the rootfs what each binary needs, so the paths are the ones
-            # that will exist inside the initramfs.
-            sudo chroot "$ROOTFS" ldd "$Source" 2>/dev/null |
-              awk '{ for (Index = 1; Index <= NF; Index++) if ($Index ~ /^\//) print $Index }' |
-              sort -u | while read -r Library; do
-                [ -f "$ROOTFS$Library" ] && install -Dm755 "$ROOTFS$Library" "$INITRAMFS_TREE$Library"
-              done
+          done
+          # Every top level library the rootfs has, rather than what ldd
+          # says each tool needs: ldd left libmount out, and mount is the
+          # first thing the init runs, so the initramfs died on the first
+          # line with "libmount.so.1: cannot open shared object file".
+          for Directory in lib lib64 usr/lib usr/lib64; do
+            [ -d "$ROOTFS/$Directory" ] || continue
+            find "$ROOTFS/$Directory" -maxdepth 1 -name "*.so*" -type f \
+              -o -maxdepth 1 -name "*.so*" -type l | while read -r Library; do
+                Relative="${Library#"$ROOTFS"}"
+                install -Dm755 "$Library" "$INITRAMFS_TREE$Relative"
+          done
           done
           ln -sfn bash "$INITRAMFS_TREE/bin/sh"
           echo "== the initramfs now holds"
