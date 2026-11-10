@@ -87,7 +87,6 @@ jobs:
           "$RUNNER_TEMP/kernel/scripts/config" --file "$RUNNER_TEMP/kernel/.config" \
             -e SQUASHFS -e SQUASHFS_ZSTD -e SQUASHFS_XZ \
             -e OVERLAY_FS -e OVERLAY_FS_REDIRECT_DIR -e OVERLAY_FS_METACOPY \
-            -e UNWINDER_FRAME_POINTER -d UNWINDER_ORC
           echo "== after the change"
           grep -E 'CONFIG_(SQUASHFS|OVERLAY_FS)' "$RUNNER_TEMP/kernel/.config" || true
 
@@ -119,17 +118,6 @@ jobs:
           export LD_LIBRARY_PATH=/usr/lib:/lib
           printf 'x\n' | awk '{ print "awk works", $1 }'
           make -j4 olddefconfig >/dev/null
-          # olddefconfig puts UNWINDER_ORC back, because x86_64 selects it, and
-          # objtool then wants gelf.h from elfutils which this system does not
-          # ship. Ask make to skip the tool rather than fight the config: nothing
-          # the live image needs comes out of it.
-          # objtool cannot be built here - it wants gelf.h from elfutils, which
-          # this repository does not carry - and olddefconfig keeps ORC on
-          # because x86_64 selects it. Rather than fight the config, put an
-          # empty executable where make looks for the built tool and give it a
-          # newer timestamp than the sources, so make treats it as done.
-          touch tools/objtool/objtool
-          chmod +x tools/objtool/objtool
           make -j4 bzImage
           INSIDE
           sudo install -m755 "$RUNNER_TEMP/build-kernel-inside.sh" \
