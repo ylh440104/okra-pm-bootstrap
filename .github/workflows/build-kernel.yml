@@ -84,9 +84,7 @@ jobs:
           grep -E 'CONFIG_(SQUASHFS|OVERLAY_FS)' "$RUNNER_TEMP/kernel/.config" || true
           # Both are needed: squashfs to read the compressed root, overlayfs to
           # make a read-only root writable the way a live system expects.
-          "$RUNNER_TEMP/kernel/scripts/config" --file "$RUNNER_TEMP/kernel/.config" \
-            -e SQUASHFS -e SQUASHFS_ZSTD -e SQUASHFS_XZ \
-            -e OVERLAY_FS -e OVERLAY_FS_REDIRECT_DIR -e OVERLAY_FS_METACOPY \
+          "$RUNNER_TEMP/kernel/scripts/config" --file "$RUNNER_TEMP/kernel/.config" -e SQUASHFS -e SQUASHFS_ZSTD -e SQUASHFS_XZ -e OVERLAY_FS -e OVERLAY_FS_REDIRECT_DIR -e OVERLAY_FS_METACOPY
           echo "== after the change"
           grep -E 'CONFIG_(SQUASHFS|OVERLAY_FS)' "$RUNNER_TEMP/kernel/.config" || true
 
