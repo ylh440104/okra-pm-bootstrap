@@ -121,25 +121,19 @@ command -v g++ || { echo "no g++" >&2; exit 1; }
 g++ --version | head -1
 uname -m
 
-# Shared source list: opsis and the lunar library, then the lunar front end.
-Sources=(
-	"$Source/opsis/src/engine.cpp"
-	"$Source/lib/okrapmlib/src/version.cpp"
-	"$Source/lib/okrapmlib/src/object.cpp"
-	"$Source/lib/okrapmlib/src/object_ref.cpp"
-	"$Source/lib/okrapmlib/src/operation.cpp"
-	"$Source/lib/okrapmlib/src/transaction.cpp"
-	"$Source/lib/okrapmlib/src/repository.cpp"
-	"$Source/lib/okrapmlib/src/resolver.cpp"
-	"$Source/lib/okrapmlib/src/system_store.cpp"
-	"$Source/lib/okrapmlib/src/snapshot.cpp"
-	"$Source/lib/okrapmlib/src/extension_api.cpp"
-	"$Source/lib/okrapmlib/src/artifact_engine.cpp"
-	"$Source/lib/okrapmlib/src/network_downloader.cpp"
-	"$Source/lib/okrapmlib/src/pipeline_engine.cpp"
-	"$Source/lib/okrapmlib/src/lunar_core.cpp"
-)
-
+# The source lists are read from the tree rather than written out here.
+# Upstream renames and moves these files, and a list that names them by hand
+# stops the build on a path that no longer exists - engine.cpp became
+# native.cpp, and api, core and interpreter appeared beside it.
+Sources=()
+for File in "$Source"/opsis/src/*.cpp; do
+	[ "$(basename "$File")" = "main.cpp" ] && continue
+	Sources+=("$File")
+done
+LibSources=()
+for File in "$Source"/lib/okrapmlib/src/*.cpp; do
+	LibSources+=("$File")
+done
 Includes=(
 	-I"$Source/opsis/include"
 	-I"$Source/lib/okrapmlib/include"
@@ -148,14 +142,14 @@ Includes=(
 
 echo "== building opsis, the packer"
 g++ -std=c++17 -O2 -D_GNU_SOURCE "${Includes[@]}" \
-	"$Source/opsis/src/engine.cpp" "$Source/opsis/src/main.cpp" \
+	"${Sources[@]}" "$Source/opsis/src/main.cpp" \
 	-ldl -o "$Build/opsis" || { echo "opsis did not build" >&2; exit 1; }
 "$Build/opsis" help >/dev/null 2>&1 || true
 echo "== opsis runs"
 
 echo "== building lunar, the package manager"
 g++ -std=c++17 -O2 -D_GNU_SOURCE "${Includes[@]}" \
-	"${Sources[@]}" \
+	"${LibSources[@]}" \
 	"$Source/src/lunar/src/main.cpp" "$Source/src/lunar/src/cli_text.cpp" \
 	-ldl -o "$Build/lunar" || { echo "lunar did not build" >&2; exit 1; }
 "$Build/lunar" help >/dev/null 2>&1 || { echo "lunar does not run" >&2; exit 1; }
