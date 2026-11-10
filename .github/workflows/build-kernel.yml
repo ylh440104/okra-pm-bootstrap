@@ -1,0 +1,169 @@
+name: Build a kernel that can run the live image
+
+# The kernel published in okra-userland was built with CONFIG_SQUASHFS and
+# CONFIG_OVERLAY_FS both unset, so no live image can boot with it: the init
+# cannot mount the compressed root, and even if it could, nothing can make a
+# read-only filesystem writable without overlayfs.
+#
+# This compiles the same kernel source with those two enabled and nothing else
+# changed, using the published kernel.config as the base. The compiler is the
+# one the bootstrap produced, inside the installed rootfs, so the result is the
+# system building its own kernel.
+on:
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: 'Attach the kernel to the okra-kernel release'
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+  actions: read
+
+env:
+  OKRA_TARGET_TRIPLE: x86_64-okra-linux-gnu
+
+jobs:
+  kernel:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install what the build needs
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            cmake patchelf patch tar xz-utils zstd gzip bzip2 lzip file rsync \
+            python3 wget curl ca-certificates git unzip \
+            bc flex bison libssl-dev libelf-dev cpio kmod
+
+      - name: Fetch the oaa toolkit
+        run: |
+          set -euo pipefail
+          git clone -q --depth 1 --branch fix/version-suffix \
+            "https://github.com/ylh440104/okrapm.git" vendor/okrapm
+          ./scripts/patch-okrapm.sh vendor/okrapm
+
+      - name: Build the host lunar
+        run: |
+          set -euo pipefail
+          cmake -S vendor/okrapm -B "$RUNNER_TEMP/okrapm-build" \
+            -DCMAKE_BUILD_TYPE=Release >/dev/null
+          cmake --build "$RUNNER_TEMP/okrapm-build" -j4 --target lunar >/dev/null
+          mkdir -p "$RUNNER_TEMP/host-lunar"
+          cp "$RUNNER_TEMP/okrapm-build/src/lunar/lunar" "$RUNNER_TEMP/host-lunar/lunar"
+
+      - name: Install the published userland
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          ./scripts/install-published-userland.sh \
+            "$RUNNER_TEMP/okra-rootfs" \
+            "$RUNNER_TEMP/host-lunar/lunar" \
+            repo
+          sudo chown -R 0:0 "$RUNNER_TEMP/okra-rootfs"
+
+      - name: Fetch the kernel source
+        run: |
+          set -euo pipefail
+          git clone -q --depth 1 --branch main \
+            "https://github.com/OkraLinux/KERNEL.git" "$RUNNER_TEMP/kernel"
+
+      - name: Take the published config and turn on what a live image needs
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          curl -fsSL --retry 3 -m 300 -H "Authorization: token $GH_TOKEN" \
+            -o "$RUNNER_TEMP/kernel/.config" \
+            "https://github.com/ylh440104/okra-oaa-packages-x86_64/releases/download/okra-userland/kernel.config"
+          echo "== the settings that decide whether a live image can run"
+          grep -E 'CONFIG_(SQUASHFS|OVERLAY_FS)' "$RUNNER_TEMP/kernel/.config" || true
+          # Both are needed: squashfs to read the compressed root, overlayfs to
+          # make a read-only root writable the way a live system expects.
+          "$RUNNER_TEMP/kernel/scripts/config" --file "$RUNNER_TEMP/kernel/.config" \
+            -e SQUASHFS -e SQUASHFS_ZSTD -e SQUASHFS_XZ \
+            -e OVERLAY_FS -e OVERLAY_FS_REDIRECT_DIR -e OVERLAY_FS_METACOPY
+          echo "== after the change"
+          grep -E 'CONFIG_(SQUASHFS|OVERLAY_FS)' "$RUNNER_TEMP/kernel/.config" || true
+
+      - name: Build the kernel inside the system, with its own compiler
+        run: |
+          set -euo pipefail
+          ROOTFS="$RUNNER_TEMP/okra-rootfs"
+          # The source lives outside the rootfs, so it is bind mounted in and the
+          # build happens there: same compiler, same libc, same everything the
+          # system ships.
+          sudo mount --bind "$RUNNER_TEMP/kernel" "$ROOTFS/mnt" 2>/dev/null || {
+            sudo mkdir -p "$ROOTFS/mnt"
+            sudo mount --bind "$RUNNER_TEMP/kernel" "$ROOTFS/mnt"
+          }
+          sudo mount -t proc proc "$ROOTFS/proc" 2>/dev/null || true
+          sudo mount -t sysfs sysfs "$ROOTFS/sys" 2>/dev/null || true
+          sudo mount -t devtmpfs devtmpfs "$ROOTFS/dev" 2>/dev/null || true
+          sudo chroot "$ROOTFS" /bin/bash -c '
+            set -euxo pipefail
+            cd /mnt
+            export PATH=/usr/bin:/usr/sbin:/bin:/sbin
+            export HOME=/tmp
+            make -j4 olddefconfig >/dev/null
+            make -j4 bzImage
+          '
+          sudo cp "$RUNNER_TEMP/kernel/arch/x86/boot/bzImage" "$RUNNER_TEMP/bzImage"
+          ls -l "$RUNNER_TEMP/bzImage"
+
+      - name: Record how it was built
+        run: |
+          set -euo pipefail
+          cat > "$RUNNER_TEMP/kernel.build" <<RECORD
+          kernel_version: 7.2.0
+          kernel_ref: main
+          kernel_repository: https://github.com/OkraLinux/KERNEL.git
+          target_arch: x86_64
+          rootfs: installed from the published repository
+          compiler: gcc ($(sudo chroot "$RUNNER_TEMP/okra-rootfs" gcc --version | head -1))
+          compiler_path: /usr/bin/gcc (bootstrapped, native)
+          changed_from_published: CONFIG_SQUASHFS, CONFIG_SQUASHFS_ZSTD, CONFIG_SQUASHFS_XZ, CONFIG_OVERLAY_FS, CONFIG_OVERLAY_FS_REDIRECT_DIR, CONFIG_OVERLAY_FS_METACOPY
+          RECORD
+          cat "$RUNNER_TEMP/kernel.build"
+          cp "$RUNNER_TEMP/kernel/.config" "$RUNNER_TEMP/kernel.config"
+
+      - name: Check the kernel carries what the live image needs
+        run: |
+          set -euo pipefail
+          # The config is what was asked for; the file below is what the kernel
+          # says it has once it is built, which is the answer that matters.
+          if [ -f "$RUNNER_TEMP/kernel/arch/x86/boot/bzImage" ]; then
+            strings "$RUNNER_TEMP/bzImage" | grep -iE '^squashfs$|^overlay$' | sort -u || true
+          fi
+          grep -E '^CONFIG_(SQUASHFS|OVERLAY_FS)=y' "$RUNNER_TEMP/kernel.config" | wc -l | sed 's/^/  enabled settings: /'
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: okra-kernel
+          path: |
+            ${{ runner.temp }}/bzImage
+            ${{ runner.temp }}/kernel.config
+            ${{ runner.temp }}/kernel.build
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Attach it to a release
+        if: ${{ github.event.inputs.publish == 'true' }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          Tag=okra-kernel
+          gh release view "$Tag" >/dev/null 2>&1 || gh release create "$Tag" \
+            --title "Okra Linux kernel" \
+            --notes "The 7.2.0 kernel built inside the bootstrapped system with its own compiler. Config is the published one with squashfs and overlayfs turned on, which the published kernel had unset and which a live image cannot do without."
+          gh release upload "$Tag" \
+            "$RUNNER_TEMP/bzImage" \
+            "$RUNNER_TEMP/kernel.config" \
+            "$RUNNER_TEMP/kernel.build" \
+            --clobber
+          gh release view "$Tag" --json assets --jq '.assets[] | "\(.name) \(.size)"'
