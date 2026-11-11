@@ -158,7 +158,7 @@ printf '   %s\n' "${Sources[@]}" | sed 's|.*/opsis/src/|   opsis: |'
 # the CMake build, and the only thing it needs from the build system is that
 # its own directory is on the include path.
 g++ -std=c++17 -O2 -D_GNU_SOURCE "${Includes[@]}" \
-	"${LibSources[@]}" "${BridgeSources[@]}" \
+	"${LibSources[@]}" "${BridgeSources[@]}" "${Sources[@]}" \
 	"$Source/src/lunar/src/main.cpp" "$Source/src/lunar/src/cli_text.cpp" \
 	-ldl -o "$Build/lunar" || { echo "lunar did not build" >&2; exit 1; }
 "$Build/lunar" help >/dev/null 2>&1 || { echo "lunar does not run" >&2; exit 1; }
