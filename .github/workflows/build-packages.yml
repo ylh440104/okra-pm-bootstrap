@@ -45,9 +45,19 @@ jobs:
 
       - name: Install what the build needs
         run: |
-          # The runner's resolver drops archive.ubuntu.com now and then, and a
-          # single miss fails the whole job before anything is built. Ask apt to
-          # retry, and retry the update itself.
+          # This resolver cannot answer for azure.archive.ubuntu.com, which is
+          # what apt-mirrors points at, so every fetch dies before a recipe is
+          # touched. Point apt at the main archive instead, and keep retries.
+          if ! getent hosts azure.archive.ubuntu.com >/dev/null 2>&1; then
+            echo "azure mirror does not resolve here, using archive.ubuntu.com"
+            {
+              echo 'Types: deb'
+              echo 'URIs: http://archive.ubuntu.com/ubuntu/'
+              echo 'Suites: noble noble-updates noble-backports'
+              echo 'Components: main restricted universe multiverse'
+              echo 'Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg'
+            } | sudo tee /etc/apt/sources.list.d/ubuntu.sources >/dev/null
+          fi
           APT_OPTS="-o Acquire::Retries=5 -o Acquire::http::Timeout=30"
           for Attempt in 1 2 3; do
             if sudo apt-get $APT_OPTS update; then break; fi
