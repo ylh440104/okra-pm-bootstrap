@@ -20,5 +20,15 @@ New = ('if [ -f /cdrom/LiveOS/rootfs.squashfs ]; then\n'
 assert Old in Text, 'squashfs mount not found'
 Text = Text.replace(Old, New, 1)
 
+Old = ('if [ ! -x /newroot/bin/bash ] && [ -x /bin/bash ]; then\n'
+       '    cp /bin/bash /newroot/bin/bash')
+New = ('# line 74 earlier pointed /newroot/bin/bash at ../usr/bin/bash, which the\n'
+       '# rootfs may not carry. cp cannot write through that link, so it says\n'
+       '# "not writing through dangling symlink" and bash stays missing.\n'
+       'rm -f /newroot/bin/bash /newroot/bin/sh /newroot/bin/ash\n'
+       'if [ ! -x /newroot/bin/bash ] && [ -x /bin/bash ]; then\n'
+       '    cp /bin/bash /newroot/bin/bash')
+assert Old in Text, 'bash copy not found'
+Text = Text.replace(Old, New, 1)
 open(Path, 'w', encoding='utf-8').write(Text)
 print('init patched')

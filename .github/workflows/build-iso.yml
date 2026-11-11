@@ -92,6 +92,19 @@ jobs:
           # runner. In the image that is wrong twice over: systemd expects root
           # to own the files it starts, and every setuid binary stops being one.
           sudo chown -R 0:0 "$RUNNER_TEMP/okra-rootfs"
+          # systemd installs a link to /dev/null over every unit that does not
+          # apply to the way it was built, and /dev/null is not on the image. What
+          # survives is a config tree full of links pointing nowhere: udevd among
+          # them, so no device nodes ever appear. Drop the dead links and let
+          # systemd presets decide again from the units that are actually there.
+          sudo find "$RUNNER_TEMP/okra-rootfs/etc/systemd/system" \
+            -xtype l -delete 2>/dev/null || true
+          sudo find "$RUNNER_TEMP/okra-rootfs/etc/systemd/system" \
+            -maxdepth 1 -type l -lname "/dev/null" -delete 2>/dev/null || true
+          if [ -x "$RUNNER_TEMP/okra-rootfs/usr/bin/systemctl" ]; then
+            sudo chroot "$RUNNER_TEMP/okra-rootfs" /usr/bin/systemctl preset-all \
+              >/dev/null 2>&1 || true
+          fi
 
       - name: Put the kernel where the LiveCD scripts look for it
         env:
