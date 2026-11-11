@@ -106,9 +106,19 @@ RenameToLunarNames() {
 # Return: 0 when they are in the repository.
 AddMissingPackages() {
 	echo "== building the libraries the userland is missing"
+	# oaa-build is called from the checkout that built the package manager,
+	# and that checkout is not always under vendor/. Take whichever of the
+	# usual places actually holds it.
+	OaaTools=""
+	for Candidate in "$RepositoryRoot/vendor/okrapm/oaatools" \
+	                 "${OKRA_OKRAPM_SOURCE:-}/oaatools" \
+	                 "$RepositoryRoot/../okra-okrapm/source/oaatools"; do
+		if [ -x "$Candidate/oaa-build" ]; then OaaTools="$Candidate"; break; fi
+	done
+	[ -n "$OaaTools" ] || OaaTools="$RepositoryRoot/vendor/okrapm/oaatools"
 	OKRA_TOOLCHAIN="$ToolchainRoot" \
 		OKRA_OUTPUT="$OutputDirectory/artifacts" \
-		OKRA_OAATOOLS="$RepositoryRoot/vendor/okrapm/oaatools" \
+		OKRA_OAATOOLS="$OaaTools" \
 		bash "$ScriptDirectory/make-missing-packages.sh" "$OutputDirectory/artifacts" || return 1
 	return 0
 }
