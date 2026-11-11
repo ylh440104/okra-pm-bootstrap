@@ -234,6 +234,9 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           OKRA_ARTIFACTS: ${{ runner.temp }}/okra-okrapm/Okra.okrapm.oaa
+          # Where the package manager was checked out. publish-repo needs
+          # oaa-build from there to build the libraries the userland lacks.
+          OKRA_OKRAPM_SOURCE: ${{ runner.temp }}/okra-okrapm/source
         run: |
           set -euo pipefail
           ./scripts/publish-repo.sh > "$RUNNER_TEMP/publish-repo.log" 2>&1 || {
