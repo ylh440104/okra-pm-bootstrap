@@ -45,15 +45,23 @@ jobs:
 
       - name: Install what the build needs
         run: |
-          # This resolver cannot answer for azure.archive.ubuntu.com, which is
-          # what apt-mirrors points at, so every fetch dies before a recipe is
-          # touched. Point apt at the main archive instead, and keep retries.
-          if ! getent hosts azure.archive.ubuntu.com >/dev/null 2>&1; then
-            echo "azure mirror does not resolve here, using archive.ubuntu.com"
+          # Neither azure.archive.ubuntu.com nor archive.ubuntu.com resolve on
+          # this runner: both answer Temporary failure resolving, so apt cannot
+          # reach anything by name. Hand it the address instead and drop the
+          # mirrors file, which only points back at the names.
+          if ! getent hosts archive.ubuntu.com >/dev/null 2>&1; then
+            echo "archive.ubuntu.com does not resolve, falling back to an address"
+            sudo rm -f /etc/apt/apt-mirrors.txt
             {
               echo 'Types: deb'
-              echo 'URIs: http://archive.ubuntu.com/ubuntu/'
+              echo 'URIs: http://185.125.190.81/ubuntu/'
               echo 'Suites: noble noble-updates noble-backports'
+              echo 'Components: main restricted universe multiverse'
+              echo 'Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg'
+              echo ''
+              echo 'Types: deb'
+              echo 'URIs: http://185.125.190.36/ubuntu/'
+              echo 'Suites: noble-security'
               echo 'Components: main restricted universe multiverse'
               echo 'Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg'
             } | sudo tee /etc/apt/sources.list.d/ubuntu.sources >/dev/null
