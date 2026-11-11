@@ -116,6 +116,7 @@ AddMissingPackages() {
 		if [ -x "$Candidate/oaa-build" ]; then OaaTools="$Candidate"; break; fi
 	done
 	[ -n "$OaaTools" ] || OaaTools="$RepositoryRoot/vendor/okrapm/oaatools"
+	export OKRA_OAATOOLS="$OaaTools"
 	OKRA_TOOLCHAIN="$ToolchainRoot" \
 		OKRA_OUTPUT="$OutputDirectory/artifacts" \
 		OKRA_OAATOOLS="$OaaTools" \
