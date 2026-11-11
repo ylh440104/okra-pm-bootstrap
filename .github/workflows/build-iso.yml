@@ -120,25 +120,16 @@ jobs:
           export JOBS=4
           # The kernel is the one from the release; do not try to build it.
           bash "$PROJECT_ROOT/live-build/scripts/build-kernel"
-          # The kernel has ext4 built in and no squashfs support, so the live
-          # root is an ext4 image on a loop device rather than a squashfs.
+          # The kernel built from this tree carries squashfs and overlayfs, so
+          # the live root is a squashfs again - compressed, and inside the 4G
+          # limit an ISO file has. The ext4 image this replaced reached 4.6G
+          # and xorriso refused it.
           mkdir -p "$ISO_ROOT/LiveOS"
           rm -f "$ISO_ROOT/LiveOS/rootfs.ext4" "$ISO_ROOT/LiveOS/rootfs.squashfs"
-          truncate -s 6G "$ISO_ROOT/LiveOS/rootfs.ext4"
-          mkfs.ext4 -q -F -m 0 -O ^has_journal -L okra-rootfs \
-            "$ISO_ROOT/LiveOS/rootfs.ext4"
-          sudo mkdir -p /mnt/liveroot
-          sudo mount -o loop "$ISO_ROOT/LiveOS/rootfs.ext4" /mnt/liveroot
-          sudo cp -a "$ROOTFS/." /mnt/liveroot/
-          sudo umount /mnt/liveroot
-          # The image is shrunk to what it holds, so the ISO does not carry 6G
-          # of empty space. This needs the filesystem to be consistent, which
-          # is why it happens after the copy and not before.
-          sudo e2fsck -f -y "$ISO_ROOT/LiveOS/rootfs.ext4" >/dev/null || true
-          sudo resize2fs -M "$ISO_ROOT/LiveOS/rootfs.ext4"
-          sudo chown "$(id -u):$(id -g)" "$ISO_ROOT/LiveOS/rootfs.ext4"
+          sudo mksquashfs "$ROOTFS" "$ISO_ROOT/LiveOS/rootfs.squashfs" \
+            -comp zstd -noappend -no-progress -all-root -quiet
           echo "== the live root image"
-          ls -l "$ISO_ROOT/LiveOS/rootfs.ext4"
+          ls -l "$ISO_ROOT/LiveOS/rootfs.squashfs"
           # The initramfs tree in the repository is not usable as it stands:          # build-initramfs replaces bin/ with tools it installs itself and then          # copies the loader and the libraries in. Skipping that step is what
           # made the first ISO panic with "Failed to execute /init (error -2)" -
           # every binary in it is dynamically linked and there was nothing to
