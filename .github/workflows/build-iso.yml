@@ -45,6 +45,26 @@ jobs:
 
       - name: Install what the build needs
         run: |
+          # This runner's resolver cannot answer for the Ubuntu mirrors, so apt
+          # fetch fails with Temporary failure resolving. Point it at the archive
+          # addresses instead, and remove the mirrors file that names them.
+          if ! getent hosts archive.ubuntu.com >/dev/null 2>&1; then
+            sudo rm -f /etc/apt/apt-mirrors.txt
+            {
+              echo 'Types: deb'
+              echo 'URIs: http://185.125.190.81/ubuntu/'
+              echo 'Suites: noble noble-updates noble-backports'
+              echo 'Components: main restricted universe multiverse'
+              echo 'Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg'
+              echo ''
+              echo 'Types: deb'
+              echo 'URIs: http://185.125.190.36/ubuntu/'
+              echo 'Suites: noble-security'
+              echo 'Components: main restricted universe multiverse'
+              echo 'Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg'
+            } | sudo tee /etc/apt/sources.list.d/ubuntu.sources >/dev/null
+          fi
+          APT_OPTS="-o Acquire::Retries=5 -o Acquire::http::Timeout=30"
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             cmake patchelf patch tar xz-utils zstd gzip bzip2 lzip file rsync \
