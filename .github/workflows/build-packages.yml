@@ -21,7 +21,7 @@ on:
       okrapm_ref:
         description: 'okrapm revision'
         required: false
-        default: 'fix/version-suffix'
+        default: 'main'
       okrapm_repository:
         description: 'okrapm repository'
         required: false
