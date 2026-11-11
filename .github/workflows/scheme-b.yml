@@ -280,6 +280,8 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           OKRA_REBUILT_DIRECTORY: ${{ runner.temp }}/okra-rebuilt
+          # repack runs oaa-build out of the package manager checkout.
+          OKRA_OAATOOLS: ${{ runner.temp }}/okra-okrapm/source/oaatools
         run: |
           set -euo pipefail
           # The rebuilds replaced binutils, gcc and glibc in the tree without
