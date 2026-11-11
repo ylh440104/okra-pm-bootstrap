@@ -124,7 +124,8 @@ uname -m
 # The source lists are read from the tree rather than written out here.
 # Upstream renames and moves these files, and a list that names them by hand
 # stops the build on a path that no longer exists - engine.cpp became
-# native.cpp, and api, core and interpreter appeared beside it.
+# native.cpp with api, core and interpreter beside it, and the lunar front
+# end now links through a bridge library that did not exist before.
 Sources=()
 for File in "$Source"/opsis/src/*.cpp; do
 	[ "$(basename "$File")" = "main.cpp" ] && continue
@@ -134,27 +135,32 @@ LibSources=()
 for File in "$Source"/lib/okrapmlib/src/*.cpp; do
 	LibSources+=("$File")
 done
+BridgeSources=()
+for File in "$Source"/bridge/src/*.cpp; do
+	BridgeSources+=("$File")
+done
 Includes=(
 	-I"$Source/opsis/include"
 	-I"$Source/lib/okrapmlib/include"
+	-I"$Source/bridge/include"
 	-I"$Source/include"
 )
-
 echo "== building opsis, the packer"
 g++ -std=c++17 -O2 -D_GNU_SOURCE "${Includes[@]}" \
 	"${Sources[@]}" "$Source/opsis/src/main.cpp" \
 	-ldl -o "$Build/opsis" || { echo "opsis did not build" >&2; exit 1; }
 "$Build/opsis" help >/dev/null 2>&1 || true
 echo "== opsis runs"
-
 echo "== building lunar, the package manager"
+# The bridge is compiled into the same link line. It is a static library in
+# the CMake build, and the only thing it needs from the build system is that
+# its own directory is on the include path.
 g++ -std=c++17 -O2 -D_GNU_SOURCE "${Includes[@]}" \
-	"${LibSources[@]}" \
+	"${LibSources[@]}" "${BridgeSources[@]}" \
 	"$Source/src/lunar/src/main.cpp" "$Source/src/lunar/src/cli_text.cpp" \
 	-ldl -o "$Build/lunar" || { echo "lunar did not build" >&2; exit 1; }
 "$Build/lunar" help >/dev/null 2>&1 || { echo "lunar does not run" >&2; exit 1; }
 echo "== lunar runs"
-
 echo "== what lunar says about itself"
 "$Build/lunar" help | head -4
 
