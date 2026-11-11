@@ -264,6 +264,10 @@ if ! grep -q '^dependencies:' "$Repack/meta.yaml"; then
 	printf 'dependencies:\n  - app.glibc\n' >> "$Repack/meta.yaml"
 	echo "== declared the libc dependency"
 fi
+# git keeps the mode it was given, and oaa-build is a shell script that
+# the checkout leaves unreadable as a program. Make it runnable before
+# calling it directly; copying it elsewhere had plus x but this does not.
+chmod +x "$ScratchDirectory/source/oaatools/oaa-build" || exit 1
 "$ScratchDirectory/source/oaatools/oaa-build" "$Repack" -o "$Archive" || {
 	echo "build-okrapm: repacking failed" >&2
 	exit 1
