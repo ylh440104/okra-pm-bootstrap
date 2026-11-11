@@ -181,8 +181,14 @@ jobs:
               sudo rm -f "$Entry"
             fi
           done
-          echo "== entries left in /etc/systemd/system:" \
-            "$(ls -1 "$ROOTFS/etc/systemd/system" 2>/dev/null | wc -l)"
+          echo "== entries left in /etc/systemd/system:"
+          ls -la "$ROOTFS/etc/systemd/system" 2>/dev/null || true
+          for Entry in "$ROOTFS"/etc/systemd/system/*; do
+            [ -e "$Entry" ] || [ -L "$Entry" ] || continue
+            if [ -L "$Entry" ]; then
+              echo "  link $(basename "$Entry") -> $(readlink "$Entry" 2>/dev/null)"
+            fi
+          done
           echo "== udevd unit present: $([ -s "$ROOTFS/usr/lib/systemd/system/systemd-udevd.service" ] && echo yes || echo no)"
           sudo mksquashfs "$ROOTFS" "$ISO_ROOT/LiveOS/rootfs.squashfs" \
             -comp zstd -noappend -no-progress -all-root -quiet
