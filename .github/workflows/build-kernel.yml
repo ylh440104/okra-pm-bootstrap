@@ -43,7 +43,7 @@ jobs:
         run: |
           set -euo pipefail
           git clone -q --depth 1 --branch main \
-            "https://github.com/ylh440104/okrapm.git" vendor/okrapm
+            "https://github.com/OkraLinux/okrapm.git" vendor/okrapm
           ./scripts/patch-okrapm.sh vendor/okrapm
 
       - name: Build the host lunar
