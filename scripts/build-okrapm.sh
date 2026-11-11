@@ -152,6 +152,8 @@ g++ -std=c++17 -O2 -D_GNU_SOURCE "${Includes[@]}" \
 "$Build/opsis" help >/dev/null 2>&1 || true
 echo "== opsis runs"
 echo "== building lunar, the package manager"
+echo "   lib sources: ${#LibSources[@]}, bridge: ${#BridgeSources[@]}, opsis: ${#Sources[@]}"
+printf '   %s\n' "${Sources[@]}" | sed 's|.*/opsis/src/|   opsis: |'
 # The bridge is compiled into the same link line. It is a static library in
 # the CMake build, and the only thing it needs from the build system is that
 # its own directory is on the include path.
