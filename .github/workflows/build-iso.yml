@@ -190,6 +190,23 @@ jobs:
             fi
           done
           echo "== udevd unit present: $([ -s "$ROOTFS/usr/lib/systemd/system/systemd-udevd.service" ] && echo yes || echo no)"
+          # Whatever the preset run decides, these units have to be loadable on
+          # the live image: without udevd there are no device nodes, and without
+          # device nodes nothing else works. Unmask by removing the unit from the
+          # config directory entirely, which is the only state systemd reads as
+          # "not masked" no matter what form the mask took.
+          for Unit in systemd-udevd.service systemd-udevd-control.socket \
+                      systemd-udevd-kernel.socket systemd-udevd-varlink.socket \
+                      systemd-udev-trigger.service systemd-udev-settle.service \
+                      systemd-hwdb-update.service systemd-modules-load.service \
+                      kmod-static-nodes.service ldconfig.service; do
+            if [ -e "$ROOTFS/etc/systemd/system/$Unit" ] || [ -L "$ROOTFS/etc/systemd/system/$Unit" ]; then
+              echo "clearing $Unit from the config directory"
+              sudo rm -rf "$ROOTFS/etc/systemd/system/$Unit"
+            fi
+          done
+          echo "== udevd service readable:" \
+            "$(head -c 40 "$ROOTFS/usr/lib/systemd/system/systemd-udevd.service" 2>/dev/null | tr -d "\n")"
           sudo mksquashfs "$ROOTFS" "$ISO_ROOT/LiveOS/rootfs.squashfs" \
             -comp zstd -noappend -no-progress -all-root -quiet
           echo "== the live root image"
