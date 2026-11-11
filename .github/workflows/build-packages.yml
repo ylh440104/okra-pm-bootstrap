@@ -25,7 +25,7 @@ on:
       okrapm_repository:
         description: 'okrapm repository'
         required: false
-        default: 'ylh440104/okrapm'
+        default: 'OkraLinux/okrapm'
 
 permissions:
   contents: write
