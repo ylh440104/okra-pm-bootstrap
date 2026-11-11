@@ -42,7 +42,7 @@ jobs:
       - name: Fetch the oaa toolkit
         run: |
           set -euo pipefail
-          git clone -q --depth 1 --branch fix/version-suffix \
+          git clone -q --depth 1 --branch main \
             "https://github.com/ylh440104/okrapm.git" vendor/okrapm
           ./scripts/patch-okrapm.sh vendor/okrapm
 
