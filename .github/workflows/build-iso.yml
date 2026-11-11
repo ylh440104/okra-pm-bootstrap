@@ -106,7 +106,7 @@ jobs:
           for Name in bzImage; do
             curl -fsSL --retry 3 -m 600 -H "Authorization: token $GH_TOKEN" \
               -o "$RUNNER_TEMP/kernel/arch/x86/boot/$Name" \
-              "https://github.com/ylh440104/okra-oaa-packages-x86_64/releases/download/okra-userland/$Name"
+              "https://github.com/ylh440104/okra-pm-bootstrap/releases/download/okra-kernel/$Name"
           done
           ls -l "$RUNNER_TEMP/kernel/arch/x86/boot/bzImage"
           file "$RUNNER_TEMP/kernel/arch/x86/boot/bzImage" || true
