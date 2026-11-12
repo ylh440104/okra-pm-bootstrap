@@ -1,0 +1,143 @@
+name: Boot, configure, and ask the system about logind
+
+# The first boot configuration now completes: the timezone is written, the
+# system reaches multi-user.target and a root shell comes up. One service
+# still fails, systemd-logind, and it retries until it gives up. Nothing in
+# the serial console says why, so this run logs in and asks.
+#
+# The answers go to the serial port through a fifo, as before: Ctrl-U clears
+# the prefilled field, the timezone is UTC in capitals, and the shell then
+# runs a handful of commands whose output lands in the same log.
+
+on:
+  workflow_dispatch:
+    inputs:
+      seconds:
+        description: 'How long to let it run'
+        required: false
+        default: '1800'
+
+jobs:
+  ask:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 50
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install what the test needs
+        run: |
+          set -euo pipefail
+          if ! getent hosts archive.ubuntu.com >/dev/null 2>&1; then
+            sudo rm -f /etc/apt/apt-mirrors.txt
+            {
+              echo 'Types: deb'
+              echo 'URIs: http://185.125.190.81/ubuntu/'
+              echo 'Suites: noble noble-updates noble-backports'
+              echo 'Components: main restricted universe multiverse'
+              echo 'Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg'
+            } | sudo tee /etc/apt/sources.list.d/ubuntu.sources >/dev/null
+          fi
+          APT_OPTS="-o Acquire::Retries=5 -o Acquire::http::Timeout=30"
+          sudo apt-get $APT_OPTS update
+          sudo apt-get $APT_OPTS install -y --no-install-recommends qemu-system-x86
+
+      - name: Get the ISO
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          curl -fsSL --retry 3 -m 900 -H "Authorization: token $GH_TOKEN" \
+            -o "$RUNNER_TEMP/okra-linux.iso" \
+            "https://github.com/ylh440104/okra-pm-bootstrap/releases/download/okra-linux-iso/okra-linux.iso"
+          ls -l "$RUNNER_TEMP/okra-linux.iso"
+
+      - name: Boot it, answer firstboot, then ask about logind
+        env:
+          SECONDS_TO_RUN: ${{ github.event.inputs.seconds }}
+          FIFO: ${{ runner.temp }}/serial.in
+          LOG: ${{ runner.temp }}/serial.log
+          DRIVER: ${{ runner.temp }}/driver.log
+        run: |
+          set -uo pipefail
+          rm -f "$FIFO" "$LOG" "$DRIVER"
+          mkfifo "$FIFO"
+
+          driver() {
+            await() {
+              waited=0
+              while [ "$waited" -lt "$2" ]; do
+                grep -q "$1" "$LOG" 2>/dev/null && return 0
+                sleep 4
+                waited=$((waited + 4))
+              done
+              echo "  (never saw: $1)" >&2
+              return 1
+            }
+
+            # Clear the prefilled field, type the word, press Enter.
+            answer() {
+              printf '\025'
+              sleep 1
+              printf '%s\r' "$1"
+              echo "  typed: $1" >&2
+            }
+
+            # Type a command at the shell, no Ctrl-U: nothing is prefilled.
+            shell_cmd() {
+              printf '%s\r' "$1"
+              echo "  ran: $1" >&2
+              sleep 6
+            }
+
+            sleep 30
+            if await 'timezone name or number' 900; then
+              sleep 5
+              answer UTC
+            fi
+
+            # Wait for the shell prompt, which arrives as [root@okra ~]# .
+            if await 'root@okra' 600; then
+              sleep 5
+              echo "== asking the system about logind" >&2
+              shell_cmd 'systemctl status systemd-logind.service --no-pager -l 2>&1 | head -30'
+              shell_cmd 'journalctl -b -u systemd-logind.service --no-pager 2>&1 | tail -30'
+              shell_cmd 'echo ===END-OF-DIAGNOSIS==='
+            fi
+            sleep 300
+          }
+
+          driver > "$FIFO" 2> "$DRIVER" &
+
+          timeout "${SECONDS_TO_RUN:-1800}" qemu-system-x86_64 \
+            -m 2048 -smp 2 -accel tcg \
+            -cdrom "$RUNNER_TEMP/okra-linux.iso" -boot d \
+            -display none -serial stdio -no-reboot \
+            < "$FIFO" \
+            > "$LOG" 2>&1 || true
+
+          kill "$(jobs -p)" 2>/dev/null || true
+          rm -f "$FIFO"
+
+      - name: Say what happened
+        if: always()
+        run: |
+          set -uo pipefail
+          echo "== what the driver did"
+          cat "$RUNNER_TEMP/driver.log" 2>/dev/null || true
+          echo
+          echo "== the diagnosis"
+          sed -n '/asking the system about logind/,$p' "$RUNNER_TEMP/serial.log" 2>/dev/null | head -80 || true
+          echo
+          echo "== the last lines"
+          tail -20 "$RUNNER_TEMP/serial.log" 2>/dev/null || true
+
+      - name: Upload the logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: okra-logind-diag
+          path: |
+            ${{ runner.temp }}/serial.log
+            ${{ runner.temp }}/driver.log
+          if-no-files-found: warn
+          retention-days: 14
