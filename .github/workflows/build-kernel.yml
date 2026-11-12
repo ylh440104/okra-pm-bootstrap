@@ -102,11 +102,19 @@ jobs:
             "https://github.com/ylh440104/okra-oaa-packages-x86_64/releases/download/okra-userland/kernel.config"
           echo "== the settings that decide whether a live image can run"
           grep -E 'CONFIG_(SQUASHFS|OVERLAY_FS)' "$RUNNER_TEMP/kernel/.config" || true
-          # Both are needed: squashfs to read the compressed root, overlayfs to
-          # make a read-only root writable the way a live system expects.
-          "$RUNNER_TEMP/kernel/scripts/config" --file "$RUNNER_TEMP/kernel/.config" -e SQUASHFS -e SQUASHFS_ZSTD -e SQUASHFS_XZ -e OVERLAY_FS -e OVERLAY_FS_REDIRECT_DIR -e OVERLAY_FS_METACOPY
+          # squashfs to read the compressed root and overlayfs to make a
+          # read-only root writable the way a live system expects. The two BPF
+          # options are what systemd checks before it will fire-wall a unit that
+          # carries IPAddressDeny=, and the journal carries one. The IRC
+          # conntrack helper is dropped: the kernel prints a removal notice for
+          # it on every boot and nothing here speaks IRC.
+          "$RUNNER_TEMP/kernel/scripts/config" --file "$RUNNER_TEMP/kernel/.config" \
+            -e SQUASHFS -e SQUASHFS_ZSTD -e SQUASHFS_XZ \
+            -e OVERLAY_FS -e OVERLAY_FS_REDIRECT_DIR -e OVERLAY_FS_METACOPY \
+            -e BPF_SYSCALL -e CGROUP_BPF \
+            -d NF_CONNTRACK_IRC
           echo "== after the change"
-          grep -E 'CONFIG_(SQUASHFS|OVERLAY_FS)' "$RUNNER_TEMP/kernel/.config" || true
+          grep -E 'CONFIG_(SQUASHFS|OVERLAY_FS|BPF_SYSCALL|CGROUP_BPF)|NF_CONNTRACK_IRC' "$RUNNER_TEMP/kernel/.config" || true
 
       - name: Build the kernel inside the system, with its own compiler
         run: |
@@ -155,7 +163,7 @@ jobs:
           rootfs: installed from the published repository
           compiler: gcc ($(sudo chroot "$RUNNER_TEMP/okra-rootfs" gcc --version | head -1))
           compiler_path: /usr/bin/gcc (bootstrapped, native)
-          changed_from_published: CONFIG_SQUASHFS, CONFIG_SQUASHFS_ZSTD, CONFIG_SQUASHFS_XZ, CONFIG_OVERLAY_FS, CONFIG_OVERLAY_FS_REDIRECT_DIR, CONFIG_OVERLAY_FS_METACOPY
+          changed_from_published: CONFIG_SQUASHFS, CONFIG_SQUASHFS_ZSTD, CONFIG_SQUASHFS_XZ, CONFIG_OVERLAY_FS, CONFIG_OVERLAY_FS_REDIRECT_DIR, CONFIG_OVERLAY_FS_METACOPY, CONFIG_BPF_SYSCALL, CONFIG_CGROUP_BPF, CONFIG_NF_CONNTRACK_IRC=n
           RECORD
           cat "$RUNNER_TEMP/kernel.build"
           cp "$RUNNER_TEMP/kernel/.config" "$RUNNER_TEMP/kernel.config"
@@ -168,7 +176,8 @@ jobs:
           if [ -f "$RUNNER_TEMP/kernel/arch/x86/boot/bzImage" ]; then
             strings "$RUNNER_TEMP/bzImage" | grep -iE '^squashfs$|^overlay$' | sort -u || true
           fi
-          grep -E '^CONFIG_(SQUASHFS|OVERLAY_FS)=y' "$RUNNER_TEMP/kernel.config" | wc -l | sed 's/^/  enabled settings: /'
+          grep -E '^CONFIG_(SQUASHFS|OVERLAY_FS|BPF_SYSCALL|CGROUP_BPF)=y' "$RUNNER_TEMP/kernel.config" | wc -l | sed 's/^/  enabled settings: /'
+          grep -c '^CONFIG_NF_CONNTRACK_IRC=y' "$RUNNER_TEMP/kernel.config" | sed 's/^/  irc helper built in: /'
 
       - uses: actions/upload-artifact@v4
         with:
@@ -189,7 +198,7 @@ jobs:
           Tag=okra-kernel
           gh release view "$Tag" >/dev/null 2>&1 || gh release create "$Tag" \
             --title "Okra Linux kernel" \
-            --notes "The 7.2.0 kernel built inside the bootstrapped system with its own compiler. Config is the published one with squashfs and overlayfs turned on, which the published kernel had unset and which a live image cannot do without."
+            --notes "The 7.2.0 kernel built inside the bootstrapped system with its own compiler. Config is the published one with squashfs and overlayfs turned on, which the published kernel had unset and which a live image cannot do without, and with BPF turned on so a unit IPAddressDeny= can be enforced."
           gh release upload "$Tag" \
             "$RUNNER_TEMP/bzImage" \
             "$RUNNER_TEMP/kernel.config" \

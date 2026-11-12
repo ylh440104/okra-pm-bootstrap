@@ -101,6 +101,8 @@ jobs:
               echo "== asking the system about logind" >&2
               shell_cmd 'systemctl status systemd-logind.service --no-pager -l 2>&1 | head -30'
               shell_cmd 'journalctl -b -u systemd-logind.service --no-pager 2>&1 | tail -30'
+              shell_cmd 'ls -l /run/dbus/ 2>&1'
+              shell_cmd 'systemctl --failed --no-pager 2>&1 | head -20'
               shell_cmd 'echo ===END-OF-DIAGNOSIS==='
             fi
             sleep 300

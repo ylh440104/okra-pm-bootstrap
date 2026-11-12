@@ -259,6 +259,37 @@ jobs:
           sudo find "$ROOTFS/etc/systemd/system" -xtype l -delete 2>/dev/null || true
           echo "== dead links removed, entries left:" \
             "$(find "$ROOTFS/etc/systemd/system" -type l 2>/dev/null | wc -l)"
+          # A compiled hardware database. The imds generator runs before any
+          # service and opens this file directly; when it is absent the
+          # generator fails and says so on every boot. Building it here also
+          # means the boot-time update service finds nothing stale to redo.
+          sudo chroot "$ROOTFS" /usr/bin/systemd-hwdb update
+          ls -l "$ROOTFS/etc/udev/hwdb.bin"
+          # The units the live init masks on purpose. The first boot presets
+          # every unit in the search path, meets these masks, and logs a
+          # failure for each one. Saying disable here states the same intent
+          # the masks do, so the pass has nothing to complain about. The root
+          # mount is generated each boot and cannot be enabled at all, so it
+          # is left alone.
+          sudo mkdir -p "$ROOTFS/usr/lib/systemd/system-preset"
+          sudo tee "$ROOTFS/usr/lib/systemd/system-preset/99-okra-live.preset" >/dev/null <<'PRESET'
+          disable serial-getty@ttyS0.service
+          disable console-getty.service
+          disable debug-shell.service
+          disable systemd-ask-password-console.path
+          disable systemd-ask-password-console.service
+          disable ldconfig.service
+          ignore -.mount
+          PRESET
+          cat "$ROOTFS/usr/lib/systemd/system-preset/99-okra-live.preset"
+          # The wireless regulatory database. cfg80211 asks for it as soon as
+          # it comes up and logs a failed firmware load when it is missing,
+          # which it is on a machine with no wireless hardware of its own.
+          sudo mkdir -p "$ROOTFS/usr/lib/firmware" "$ROOTFS/lib/firmware"
+          sudo cp "$GITHUB_WORKSPACE/files/firmware/regulatory.db" \
+                  "$GITHUB_WORKSPACE/files/firmware/regulatory.db.p7s" \
+                  "$ROOTFS/lib/firmware/"
+          ls -l "$ROOTFS/lib/firmware/"
           sudo mksquashfs "$ROOTFS" "$ISO_ROOT/LiveOS/rootfs.squashfs" \
             -comp zstd -noappend -no-progress -all-root -quiet
           echo "== the live root image"
@@ -309,6 +340,12 @@ jobs:
           cp -aL "$ROOTFS/lib64/ld-linux-x86-64.so.2" "$INITRAMFS_TREE/lib64/" 2>/dev/null ||
             cp -aL "$ROOTFS/usr/lib64/ld-linux-x86-64.so.2" "$INITRAMFS_TREE/lib64/"
           ln -sfn usr/lib "$INITRAMFS_TREE/lib"
+          # The regulatory database is asked for at 5s, while this initramfs is
+          # still the root; the copy in the live root is too late for that.
+          mkdir -p "$INITRAMFS_TREE/usr/lib/firmware"
+          cp "$GITHUB_WORKSPACE/files/firmware/regulatory.db" \
+             "$GITHUB_WORKSPACE/files/firmware/regulatory.db.p7s" \
+             "$INITRAMFS_TREE/usr/lib/firmware/"
           echo "== what the loader will find"
           ls "$INITRAMFS_TREE/usr/lib" | sed -n "1,25p"
           ls -l "$INITRAMFS_TREE/lib" "$INITRAMFS_TREE/lib64"
