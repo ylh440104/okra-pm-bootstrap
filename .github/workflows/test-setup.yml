@@ -1,10 +1,15 @@
 name: Answer the Initial Setup in QEMU
 
-# Walks through the first boot configuration. The setup is
-# systemd-firstboot.service and it reads from the console. Feeding the serial
-# port bytes did not work: neither a newline nor a carriage return ended the
-# line, and the answers piled up as UTCUTC and UTCokra. This drives the
-# keyboard through the monitor instead, so Enter is a real Enter.
+# Walks through systemd-firstboot.service, which asks for the timezone, the
+# hostname and the root password on the console.
+#
+# Reading the v262 sources settled what earlier rounds only guessed at. Two
+# things were wrong. First, the line terminator was never the problem:
+# ask_string_full accepts both \n and \r. Second, the prompt comes prefilled -
+# prompt_loop passes the completion list and the first entry is preselected -
+# so the timezone field already contained UTC and answer built on top of it
+# came out as UTCUTC. Ctrl-U clears the field the way it does in a shell, and
+# that is what this sends now.
 
 on:
   workflow_dispatch:
@@ -61,8 +66,19 @@ jobs:
           send() {
             for Key in "$@"; do
               printf 'sendkey %s\n' "$Key" | socat - "UNIX-CONNECT:$MON" >/dev/null 2>&1
-              sleep 0.5
+              sleep 0.4
             done
+          }
+
+          # Type a word as key presses, after clearing the field.
+          type_clear() {
+            send ctrl-u
+            sleep 0.5
+            for (( i=0; i<${#1}; i++ )); do
+              send "${1:$i:1}"
+            done
+            sleep 0.3
+            send ret
           }
 
           await() {
@@ -89,26 +105,27 @@ jobs:
 
           (
             wait_for_qemu || exit 1
-            if await 'Please configure the system' 900; then
-              sleep 8
-              echo "== answering the timezone"
-              send u t c ret
-              if await 'hostname' 400; then
-                sleep 8
-                echo "== answering the hostname"
-                send o k r a ret
-                if await 'root password' 400; then
-                  sleep 8
-                  echo "== answering the password"
-                  send o k r a ret
-                  if await 'root password' 400 2; then
-                    sleep 8
-                    echo "== answering the password again"
-                    send o k r a ret
+            if await 'timezone name or number' 900; then
+              sleep 6
+              echo "== timezone: clearing the prefill, then typing utc"
+              type_clear utc
+              if await 'new hostname' 400; then
+                sleep 6
+                echo "== hostname: clearing the prefill, then typing okra"
+                type_clear okra
+                if await 'new root password' 400; then
+                  sleep 6
+                  echo "== root password"
+                  type_clear okra
+                  if await 'root password again' 400; then
+                    sleep 6
+                    echo "== root password again"
+                    type_clear okra
                   fi
                 fi
               fi
             fi
+            sleep 600
           ) &
 
           timeout "${SECONDS_TO_RUN:-1500}" qemu-system-x86_64 \
@@ -123,7 +140,7 @@ jobs:
           echo "== from the first prompt on"
           N=$(grep -n 'Please configure the system' "$LOG" | head -1 | cut -d: -f1 || true)
           if [ -n "${N:-}" ]; then
-            sed -n "$N,\$p" "$LOG" | head -60
+            sed -n "$N,\$p" "$LOG" | head -70
           else
             tail -40 "$LOG"
           fi
@@ -135,8 +152,9 @@ jobs:
           LOG="$RUNNER_TEMP/serial.log"
           [ -f "$LOG" ] || { echo "no serial log was produced"; exit 0; }
           echo "== how far the setup got"
-          for Mark in 'Please configure' 'new timezone' 'hostname' 'root password' 'complete' 'login'; do
-            printf '  %-24s %s\n' "$Mark" "$(grep -c "$Mark" "$LOG" 2>/dev/null || true)"
+          for Mark in 'timezone name or number' 'new hostname' 'new root password' \
+                      'root password again' 'Invalid input' 'complete' 'login'; do
+            printf '  %-26s %s\n' "$Mark" "$(grep -c "$Mark" "$LOG" 2>/dev/null || true)"
           done
           echo
           echo "== the tail"
