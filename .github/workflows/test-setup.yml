@@ -14,7 +14,7 @@ on:
       answers:
         description: 'Lines to send, separated by |, sent after each prompt'
         required: false
-        default: 'UTC|root|root|root'
+        default: 'UTC|okra|okra|okra'
 
 jobs:
   talk:
@@ -61,12 +61,15 @@ jobs:
           mkfifo "$FIFO"
 
           # The responses go in one per prompt, spaced out so each one lands
-          # after the question it is meant for.
+          # after the question it is meant for, and each ends with a carriage
+          # return: a serial console takes Enter as CR, and a bare newline
+          # only moved the cursor. The answers piled up in the buffer as
+          # "UTCUTC" and "UTCroot" until they were refused as invalid.
           IFS='|' read -r -a Lines <<< "${ANSWERS:-UTC}"
           (
             sleep 40
             for Line in "${Lines[@]}"; do
-              printf '%s\n' "$Line"
+              printf '%s\r' "$Line"
               sleep 12
             done
             sleep 240
