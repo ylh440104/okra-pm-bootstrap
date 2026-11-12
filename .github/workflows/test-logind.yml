@@ -102,7 +102,7 @@ jobs:
               shell_cmd 'systemctl status systemd-logind.service --no-pager -l 2>&1 | head -30'
               shell_cmd 'journalctl -b -u systemd-logind.service --no-pager 2>&1 | tail -30'
               shell_cmd 'ls -la /usr/lib/systemd/system-preset/ 2>&1'
-              shell_cmd 'cat /usr/lib/systemd/system-preset/99-okra-live.preset 2>&1'
+              shell_cmd 'cat /usr/lib/systemd/system-preset/50-okra-live.preset 2>&1'
               shell_cmd 'ls -l /run/dbus/ 2>&1'
               shell_cmd 'systemctl --failed --no-pager 2>&1 | head -20'
               shell_cmd 'echo ===END-OF-DIAGNOSIS==='
