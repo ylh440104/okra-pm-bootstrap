@@ -280,8 +280,17 @@ jobs:
           # the masks do, so the pass has nothing to complain about. The root
           # mount is generated each boot and cannot be enabled at all, so it
           # is left alone.
+          #
+          # The template needs its own line. getty@.service carries
+          # DefaultInstance=tty1, and the stock preset enables the template,
+          # so naming only the instance leaves the template enabled and the
+          # enable step then resolves the default instance, finds it masked,
+          # and reports that. The file is numbered to sort before the stock
+          # 90-systemd.preset: rules are read in order and the first match
+          # wins, so a later number would never be consulted.
           sudo mkdir -p "$ROOTFS/usr/lib/systemd/system-preset"
-          sudo tee "$ROOTFS/usr/lib/systemd/system-preset/99-okra-live.preset" >/dev/null <<'PRESET'
+          sudo tee "$ROOTFS/usr/lib/systemd/system-preset/50-okra-live.preset" >/dev/null <<'PRESET'
+          disable getty@.service
           disable getty@tty1.service
           disable serial-getty@ttyS0.service
           disable console-getty.service
@@ -291,7 +300,7 @@ jobs:
           disable ldconfig.service
           ignore -.mount
           PRESET
-          cat "$ROOTFS/usr/lib/systemd/system-preset/99-okra-live.preset"
+          cat "$ROOTFS/usr/lib/systemd/system-preset/50-okra-live.preset"
           # The wireless regulatory database. cfg80211 asks for it as soon as
           # it comes up and logs a failed firmware load when it is missing,
           # which it is on a machine with no wireless hardware of its own.
