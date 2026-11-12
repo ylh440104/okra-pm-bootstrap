@@ -1,0 +1,112 @@
+name: Answer the Initial Setup in QEMU
+
+# Boots the published ISO with a real console on the serial port and writes
+# answers to it, so the first-boot configuration can be walked through. The
+# plain test only listens; this one talks back.
+
+on:
+  workflow_dispatch:
+    inputs:
+      seconds:
+        description: 'How long to let it run'
+        required: false
+        default: '900'
+      answers:
+        description: 'Lines to send, separated by |, sent after each prompt'
+        required: false
+        default: 'UTC|root|root|root'
+
+jobs:
+  talk:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install what the test needs
+        run: |
+          set -euo pipefail
+          if ! getent hosts archive.ubuntu.com >/dev/null 2>&1; then
+            sudo rm -f /etc/apt/apt-mirrors.txt
+            {
+              echo 'Types: deb'
+              echo 'URIs: http://185.125.190.81/ubuntu/'
+              echo 'Suites: noble noble-updates noble-backports'
+              echo 'Components: main restricted universe multiverse'
+              echo 'Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg'
+            } | sudo tee /etc/apt/sources.list.d/ubuntu.sources >/dev/null
+          fi
+          APT_OPTS="-o Acquire::Retries=5 -o Acquire::http::Timeout=30"
+          sudo apt-get $APT_OPTS update
+          sudo apt-get $APT_OPTS install -y --no-install-recommends qemu-system-x86
+
+      - name: Get the ISO
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          curl -fsSL --retry 3 -m 900 -H "Authorization: token $GH_TOKEN" \
+            -o "$RUNNER_TEMP/okra-linux.iso" \
+            "https://github.com/ylh440104/okra-pm-bootstrap/releases/download/okra-linux-iso/okra-linux.iso"
+          ls -l "$RUNNER_TEMP/okra-linux.iso"
+
+      - name: Boot it and answer the questions
+        env:
+          SECONDS_TO_RUN: ${{ github.event.inputs.seconds }}
+          ANSWERS: ${{ github.event.inputs.answers }}
+        run: |
+          set -uo pipefail
+          FIFO="$RUNNER_TEMP/serial.in"
+          rm -f "$FIFO"
+          mkfifo "$FIFO"
+
+          # The responses go in one per prompt, spaced out so each one lands
+          # after the question it is meant for.
+          IFS='|' read -r -a Lines <<< "${ANSWERS:-UTC}"
+          (
+            sleep 40
+            for Line in "${Lines[@]}"; do
+              printf '%s\n' "$Line"
+              sleep 12
+            done
+            sleep 240
+          ) > "$FIFO" 2>/dev/null &
+          Feeder=$!
+
+          timeout "${SECONDS_TO_RUN:-900}" qemu-system-x86_64 \
+            -m 2048 -smp 2 -accel tcg \
+            -cdrom "$RUNNER_TEMP/okra-linux.iso" -boot d \
+            -display none -serial stdio -no-reboot \
+            < "$FIFO" > "$RUNNER_TEMP/serial.log" 2>&1 || true
+          kill "$Feeder" 2>/dev/null || true
+          rm -f "$FIFO"
+
+          echo "== $(wc -l < "$RUNNER_TEMP/serial.log") lines of serial output"
+          echo
+          echo "== the last 60 lines"
+          tail -60 "$RUNNER_TEMP/serial.log" || true
+
+      - name: Say what happened
+        if: always()
+        run: |
+          set -uo pipefail
+          LOG="$RUNNER_TEMP/serial.log"
+          [ -f "$LOG" ] || { echo "no serial log was produced"; exit 0; }
+          echo "== prompts and answers"
+          grep -nE 'enter|Enter|password|Password|name|Name|UTC|skip|Welcome|Setup|setup' "$LOG" | tail -30 || true
+          echo
+          echo "== did it get past the timezone question"
+          if grep -qE 'password|Password|user|User' "$LOG"; then
+            echo "RESULT: the setup moved past the timezone prompt"
+          else
+            echo "RESULT: still at the first prompt when the run ended"
+          fi
+
+      - name: Upload the log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: okra-setup-serial-log
+          path: ${{ runner.temp }}/serial.log
+          if-no-files-found: warn
+          retention-days: 14
