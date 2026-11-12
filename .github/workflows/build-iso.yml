@@ -221,6 +221,29 @@ jobs:
               -exec sh -c 'printf "%s -> %s\n" "$1" "$(readlink "$1")"' _ {} \; \
               2>/dev/null | grep -i udev || echo "  none mention udev"
           fi
+          # systemd reports the udev units as static, which means nothing
+          # enables them: they rely on the .wants links that ship in
+          # /usr/lib/systemd/system. A directory of the same name under /etc
+          # replaces it entirely rather than merging, and the packages leave one
+          # there holding a single unit, so every link in the vendor directory -
+          # systemd-udevd.service among them - is never seen. Copy the vendor
+          # links into the /etc directory so both are honoured.
+          for Vendor in "$ROOTFS"/usr/lib/systemd/system/*.wants \
+                        "$ROOTFS"/usr/lib/systemd/system/*.requires; do
+            [ -d "$Vendor" ] || continue
+            Name="$(basename "$Vendor")"
+            sudo mkdir -p "$ROOTFS/etc/systemd/system/$Name"
+            for Item in "$Vendor"/*; do
+              [ -e "$Item" ] || [ -L "$Item" ] || continue
+              Link="$ROOTFS/etc/systemd/system/$Name/$(basename "$Item")"
+              if [ -e "$Link" ] || [ -L "$Link" ]; then continue; fi
+              sudo ln -s "$(readlink "$Item" 2>/dev/null || echo "/usr/lib/systemd/system/$(basename "$Item")")" "$Link"
+            done
+          done
+          echo "== udevd wants link now present:" \
+            "$([ -e "$ROOTFS/etc/systemd/system/sysinit.target.wants/systemd-udevd.service" ] && echo yes || echo no)"
+          echo "== wants entries under /etc:" \
+            "$(ls -1d "$ROOTFS"/etc/systemd/system/*.wants 2>/dev/null | wc -l)"
           sudo mksquashfs "$ROOTFS" "$ISO_ROOT/LiveOS/rootfs.squashfs" \
             -comp zstd -noappend -no-progress -all-root -quiet
           echo "== the live root image"
