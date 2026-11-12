@@ -82,9 +82,9 @@ jobs:
             echo "first prompt after ${waited}s" >&2
             grep -q "timezone name or number" "$LOG" 2>/dev/null || return 1
             sleep 5
-            printf "\025"; sleep 1; printf "utc\r"; echo "typed: utc" >&2
+            printf "\025"; sleep 1; printf "UTC\r"; echo "typed: UTC" >&2
             waited=0
-            while [ "$waited" -lt 400 ]; do
+            while [ "$waited" -lt 120 ]; do
               grep -q "new hostname" "$LOG" 2>/dev/null && break
               sleep 4
               waited=$((waited + 4))
@@ -94,7 +94,7 @@ jobs:
             sleep 5
             printf "\025"; sleep 1; printf "okra\r"; echo "typed: okra" >&2
             waited=0
-            while [ "$waited" -lt 400 ]; do
+            while [ "$waited" -lt 120 ]; do
               grep -q "new root password" "$LOG" 2>/dev/null && break
               sleep 4
               waited=$((waited + 4))
@@ -104,7 +104,7 @@ jobs:
             sleep 5
             printf "\025"; sleep 1; printf "okra\r"; echo "typed: okra (password)" >&2
             waited=0
-            while [ "$waited" -lt 400 ]; do
+            while [ "$waited" -lt 120 ]; do
               grep -q "root password again" "$LOG" 2>/dev/null && break
               sleep 4
               waited=$((waited + 4))
