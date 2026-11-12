@@ -128,6 +128,9 @@ jobs:
             "$(sudo find "$RUNNER_TEMP/okra-rootfs/etc/systemd/system" -type l \
                -exec readlink {} \; 2>/dev/null | grep -c "^/dev/null$" || true)"
           if [ -x "$RUNNER_TEMP/okra-rootfs/usr/bin/systemctl" ]; then
+            # preset-all writes into the config directory, so whatever it decides
+            # is there afterwards. Let it run, then read back what it did to the
+            # units a live image cannot work without.
             sudo chroot "$RUNNER_TEMP/okra-rootfs" /usr/bin/systemctl preset-all \
               >/dev/null 2>&1 || true
           fi
@@ -207,6 +210,17 @@ jobs:
           done
           echo "== udevd service readable:" \
             "$(head -c 40 "$ROOTFS/usr/lib/systemd/system/systemd-udevd.service" 2>/dev/null | tr -d "\n")"
+          # Show the units systemd itself sees, and what it says about udevd,
+          # instead of inferring it from the files on disk.
+          if [ -x "$ROOTFS/usr/bin/systemctl" ]; then
+            echo "== systemctl list-unit-files (udev):"
+            sudo chroot "$ROOTFS" /usr/bin/systemctl list-unit-files \
+              "systemd-udevd*" --no-pager 2>&1 | head -8 || true
+            echo "== mask links under /etc:"
+            sudo find "$ROOTFS/etc/systemd" -type l \
+              -exec sh -c 'printf "%s -> %s\n" "$1" "$(readlink "$1")"' _ {} \; \
+              2>/dev/null | grep -i udev || echo "  none mention udev"
+          fi
           sudo mksquashfs "$ROOTFS" "$ISO_ROOT/LiveOS/rootfs.squashfs" \
             -comp zstd -noappend -no-progress -all-root -quiet
           echo "== the live root image"
