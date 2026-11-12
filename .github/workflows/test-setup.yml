@@ -1,8 +1,10 @@
 name: Answer the Initial Setup in QEMU
 
-# Boots the published ISO with a real console on the serial port and writes
-# answers to it, so the first-boot configuration can be walked through. The
-# plain test only listens; this one talks back.
+# Walks through the first boot configuration. The setup is
+# systemd-firstboot.service and it reads from the console. Feeding the serial
+# port bytes did not work: neither a newline nor a carriage return ended the
+# line, and the answers piled up as UTCUTC and UTCokra. This drives the
+# keyboard through the monitor instead, so Enter is a real Enter.
 
 on:
   workflow_dispatch:
@@ -10,16 +12,12 @@ on:
       seconds:
         description: 'How long to let it run'
         required: false
-        default: '900'
-      answers:
-        description: 'Lines to send, separated by |, sent after each prompt'
-        required: false
-        default: 'UTC|okra|okra|okra'
+        default: '1500'
 
 jobs:
   talk:
     runs-on: ubuntu-24.04
-    timeout-minutes: 40
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
 
@@ -38,7 +36,8 @@ jobs:
           fi
           APT_OPTS="-o Acquire::Retries=5 -o Acquire::http::Timeout=30"
           sudo apt-get $APT_OPTS update
-          sudo apt-get $APT_OPTS install -y --no-install-recommends qemu-system-x86
+          sudo apt-get $APT_OPTS install -y --no-install-recommends \
+            qemu-system-x86 socat
 
       - name: Get the ISO
         env:
@@ -53,41 +52,81 @@ jobs:
       - name: Boot it and answer the questions
         env:
           SECONDS_TO_RUN: ${{ github.event.inputs.seconds }}
-          ANSWERS: ${{ github.event.inputs.answers }}
         run: |
           set -uo pipefail
-          FIFO="$RUNNER_TEMP/serial.in"
-          rm -f "$FIFO"
-          mkfifo "$FIFO"
+          MON="$RUNNER_TEMP/monitor.sock"
+          LOG="$RUNNER_TEMP/serial.log"
+          rm -f "$MON" "$LOG"
 
-          # The responses go in one per prompt, spaced out so each one lands
-          # after the question it is meant for, and each ends with a carriage
-          # return: a serial console takes Enter as CR, and a bare newline
-          # only moved the cursor. The answers piled up in the buffer as
-          # "UTCUTC" and "UTCroot" until they were refused as invalid.
-          IFS='|' read -r -a Lines <<< "${ANSWERS:-UTC}"
-          (
-            sleep 40
-            for Line in "${Lines[@]}"; do
-              printf '%s\r' "$Line"
-              sleep 12
+          send() {
+            for Key in "$@"; do
+              printf 'sendkey %s\n' "$Key" | socat - "UNIX-CONNECT:$MON" >/dev/null 2>&1
+              sleep 0.5
             done
-            sleep 240
-          ) > "$FIFO" 2>/dev/null &
-          Feeder=$!
+          }
 
-          timeout "${SECONDS_TO_RUN:-900}" qemu-system-x86_64 \
+          await() {
+            local Pattern="$1" Limit="$2" Want="${3:-1}"
+            local Waited=0 Have=0
+            while [ "$Waited" -lt "$Limit" ]; do
+              Have=$(grep -c "$Pattern" "$LOG" 2>/dev/null || true)
+              [ "${Have:-0}" -ge "$Want" ] && return 0
+              sleep 5
+              Waited=$((Waited + 5))
+            done
+            return 1
+          }
+
+          wait_for_qemu() {
+            local Waited=0
+            while [ "$Waited" -lt 150 ]; do
+              [ -S "$MON" ] && return 0
+              sleep 2
+              Waited=$((Waited + 2))
+            done
+            return 1
+          }
+
+          (
+            wait_for_qemu || exit 1
+            if await 'Please configure the system' 900; then
+              sleep 8
+              echo "== answering the timezone"
+              send u t c ret
+              if await 'hostname' 400; then
+                sleep 8
+                echo "== answering the hostname"
+                send o k r a ret
+                if await 'root password' 400; then
+                  sleep 8
+                  echo "== answering the password"
+                  send o k r a ret
+                  if await 'root password' 400 2; then
+                    sleep 8
+                    echo "== answering the password again"
+                    send o k r a ret
+                  fi
+                fi
+              fi
+            fi
+          ) &
+
+          timeout "${SECONDS_TO_RUN:-1500}" qemu-system-x86_64 \
             -m 2048 -smp 2 -accel tcg \
             -cdrom "$RUNNER_TEMP/okra-linux.iso" -boot d \
             -display none -serial stdio -no-reboot \
-            < "$FIFO" > "$RUNNER_TEMP/serial.log" 2>&1 || true
-          kill "$Feeder" 2>/dev/null || true
-          rm -f "$FIFO"
+            -monitor "unix:$MON,server,nowait" \
+            < /dev/null > "$LOG" 2>&1 || true
 
-          echo "== $(wc -l < "$RUNNER_TEMP/serial.log") lines of serial output"
+          echo "== $(wc -l < "$LOG") lines of serial output"
           echo
-          echo "== the last 60 lines"
-          tail -60 "$RUNNER_TEMP/serial.log" || true
+          echo "== from the first prompt on"
+          N=$(grep -n 'Please configure the system' "$LOG" | head -1 | cut -d: -f1 || true)
+          if [ -n "${N:-}" ]; then
+            sed -n "$N,\$p" "$LOG" | head -60
+          else
+            tail -40 "$LOG"
+          fi
 
       - name: Say what happened
         if: always()
@@ -95,15 +134,13 @@ jobs:
           set -uo pipefail
           LOG="$RUNNER_TEMP/serial.log"
           [ -f "$LOG" ] || { echo "no serial log was produced"; exit 0; }
-          echo "== prompts and answers"
-          grep -nE 'enter|Enter|password|Password|name|Name|UTC|skip|Welcome|Setup|setup' "$LOG" | tail -30 || true
+          echo "== how far the setup got"
+          for Mark in 'Please configure' 'new timezone' 'hostname' 'root password' 'complete' 'login'; do
+            printf '  %-24s %s\n' "$Mark" "$(grep -c "$Mark" "$LOG" 2>/dev/null || true)"
+          done
           echo
-          echo "== did it get past the timezone question"
-          if grep -qE 'password|Password|user|User' "$LOG"; then
-            echo "RESULT: the setup moved past the timezone prompt"
-          else
-            echo "RESULT: still at the first prompt when the run ended"
-          fi
+          echo "== the tail"
+          tail -25 "$LOG" || true
 
       - name: Upload the log
         if: always()
