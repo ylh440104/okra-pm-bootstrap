@@ -282,6 +282,7 @@ jobs:
           # is left alone.
           sudo mkdir -p "$ROOTFS/usr/lib/systemd/system-preset"
           sudo tee "$ROOTFS/usr/lib/systemd/system-preset/99-okra-live.preset" >/dev/null <<'PRESET'
+          disable getty@tty1.service
           disable serial-getty@ttyS0.service
           disable console-getty.service
           disable debug-shell.service

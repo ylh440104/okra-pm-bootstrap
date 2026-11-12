@@ -55,5 +55,13 @@ New = ('rm -f /newroot/etc/systemd/system/sysinit.target.wants/debug-shell.servi
        '    /newroot/etc/systemd/system/getty.target.wants/getty@tty1.service\n')
 assert Old in Text, 'rm block not found'
 Text = Text.replace(Old, New, 1)
+
+Marker = """    /newroot/etc/systemd/system/getty.target.wants/getty@tty1.service
+"""
+Addition = """ln -sf /dev/null /newroot/etc/systemd/system/getty@tty1.service
+"""
+assert Marker in Text, 'getty wants tail not found'
+Text = Text.replace(Marker, Marker + Addition, 1)
+
 open(Path, 'w', encoding='utf-8').write(Text)
 print('init patched')
