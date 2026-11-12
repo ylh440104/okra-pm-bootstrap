@@ -177,7 +177,7 @@ jobs:
             strings "$RUNNER_TEMP/bzImage" | grep -iE '^squashfs$|^overlay$' | sort -u || true
           fi
           grep -E '^CONFIG_(SQUASHFS|OVERLAY_FS|BPF_SYSCALL|CGROUP_BPF)=y' "$RUNNER_TEMP/kernel.config" | wc -l | sed 's/^/  enabled settings: /'
-          grep -c '^CONFIG_NF_CONNTRACK_IRC=y' "$RUNNER_TEMP/kernel.config" | sed 's/^/  irc helper built in: /'
+          grep -c '^CONFIG_NF_CONNTRACK_IRC=y' "$RUNNER_TEMP/kernel.config" | sed 's/^/  irc helper built in: /' || true
 
       - uses: actions/upload-artifact@v4
         with:
