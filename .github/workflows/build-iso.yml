@@ -230,6 +230,24 @@ jobs:
             \( -name "*.wants" -o -name "*.requires" \) -type d -exec rm -rf {} + 2>/dev/null || true
           echo "== wants dirs under /etc:" \
             "$(find "$ROOTFS/etc/systemd/system" -maxdepth 1 -name "*.wants" 2>/dev/null | wc -l)"
+          # Ask systemd directly, inside the image, instead of reasoning about it
+          # from files. is-enabled and the LoadState say what systemd will do.
+          if [ -x "$ROOTFS/usr/bin/systemctl" ]; then
+            echo "== anything named udevd under /etc/systemd:"
+            find "$ROOTFS/etc/systemd" -name "*udevd*" 2>/dev/null || true
+            echo "== is-enabled: $(sudo chroot "$ROOTFS" /usr/bin/systemctl is-enabled systemd-udevd.service 2>&1 || true)"
+            echo "== LoadState: $(sudo chroot "$ROOTFS" /usr/bin/systemctl show -p LoadState --value systemd-udevd.service 2>&1 || true)"
+            echo "== UnitFileState: $(sudo chroot "$ROOTFS" /usr/bin/systemctl show -p UnitFileState --value systemd-udevd.service 2>&1 || true)"
+            # The service is static, so it is started by the wants link on
+            # sysinit.target. Ask systemd to wire that link rather than writing it
+            # by hand.
+            sudo chroot "$ROOTFS" /usr/bin/systemctl add-wants sysinit.target \
+              systemd-udevd.service systemd-udev-trigger.service \
+              systemd-modules-load.service kmod-static-nodes.service \
+              systemd-hwdb-update.service 2>&1 | head -4 || true
+            echo "== wants link after add-wants: $([ -e "$ROOTFS/etc/systemd/system/sysinit.target.wants/systemd-udevd.service" ] && echo yes || echo no)"
+
+          fi
           sudo mksquashfs "$ROOTFS" "$ISO_ROOT/LiveOS/rootfs.squashfs" \
             -comp zstd -noappend -no-progress -all-root -quiet
           echo "== the live root image"
