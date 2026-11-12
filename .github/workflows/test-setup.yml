@@ -1,15 +1,14 @@
 name: Answer the Initial Setup in QEMU
 
-# Walks through systemd-firstboot.service, which asks for the timezone, the
-# hostname and the root password on the console.
+# Walks through systemd-firstboot.service: the timezone, the hostname and the
+# root password.
 #
-# Reading the v262 sources settled what earlier rounds only guessed at. Two
-# things were wrong. First, the line terminator was never the problem:
-# ask_string_full accepts both \n and \r. Second, the prompt comes prefilled -
-# prompt_loop passes the completion list and the first entry is preselected -
-# so the timezone field already contained UTC and answer built on top of it
-# came out as UTCUTC. Ctrl-U clears the field the way it does in a shell, and
-# that is what this sends now.
+# Two rounds of this did nothing at all, and the reason was in the shell
+# rather than the console: the send routine lived behind a helper that used
+# local inside a subshell under set -u, so the branch that was meant to type
+# never ran and the log shows the prompts with no keystrokes after them. The
+# body is written out flat here, and every step prints what it saw first, so
+# the next log says whether it is the waiting or the typing that fails.
 
 on:
   workflow_dispatch:
@@ -57,76 +56,93 @@ jobs:
       - name: Boot it and answer the questions
         env:
           SECONDS_TO_RUN: ${{ github.event.inputs.seconds }}
+          MON: ${{ runner.temp }}/monitor.sock
+          LOG: ${{ runner.temp }}/serial.log
+          DRIVER: ${{ runner.temp }}/driver.log
         run: |
           set -uo pipefail
-          MON="$RUNNER_TEMP/monitor.sock"
-          LOG="$RUNNER_TEMP/serial.log"
-          rm -f "$MON" "$LOG"
-
-          send() {
-            for Key in "$@"; do
-              printf 'sendkey %s\n' "$Key" | socat - "UNIX-CONNECT:$MON" >/dev/null 2>&1
-              sleep 0.4
-            done
-          }
-
-          # Type a word as key presses, after clearing the field.
-          type_clear() {
-            send ctrl-u
-            sleep 0.5
-            for (( i=0; i<${#1}; i++ )); do
-              send "${1:$i:1}"
-            done
-            sleep 0.3
-            send ret
-          }
-
-          await() {
-            local Pattern="$1" Limit="$2" Want="${3:-1}"
-            local Waited=0 Have=0
-            while [ "$Waited" -lt "$Limit" ]; do
-              Have=$(grep -c "$Pattern" "$LOG" 2>/dev/null || true)
-              [ "${Have:-0}" -ge "$Want" ] && return 0
-              sleep 5
-              Waited=$((Waited + 5))
-            done
-            return 1
-          }
-
-          wait_for_qemu() {
-            local Waited=0
-            while [ "$Waited" -lt 150 ]; do
-              [ -S "$MON" ] && return 0
-              sleep 2
-              Waited=$((Waited + 2))
-            done
-            return 1
-          }
+          rm -f "$MON" "$LOG" "$DRIVER"
 
           (
-            wait_for_qemu || exit 1
-            if await 'timezone name or number' 900; then
+            # Give QEMU time to create the monitor socket.
+            i=0
+            while [ "$i" -lt 120 ]; do
+              [ -S "$MON" ] && break
+              sleep 2
+              i=$((i + 2))
+            done
+            echo "monitor socket: $([ -S "$MON" ] && echo up || echo missing)"
+
+            key() {
+              printf 'sendkey %s\n' "$1" | socat - "UNIX-CONNECT:$MON" 2>/dev/null
+              sleep 0.4
+            }
+
+            # Ctrl-U empties the field, because the prompt arrives prefilled
+            # with the preselected completion.
+            answer() {
+              echo "typing: $1"
+              key ctrl-u
+              sleep 0.6
+              j=0
+              while [ "$j" -lt "${#1}" ]; do
+                key "$(printf '%s' "$1" | cut -c$((j + 1)))"
+                j=$((j + 1))
+              done
+              sleep 0.4
+              key ret
+            }
+
+            # Poll for a line to show up, without local and without a subshell.
+            g=0
+            while [ "$g" -lt 900 ]; do
+              grep -q 'timezone name or number' "$LOG" 2>/dev/null && break
+              sleep 5
+              g=$((g + 5))
+            done
+            echo "waited ${g}s for the first prompt"
+            if grep -q 'timezone name or number' "$LOG" 2>/dev/null; then
               sleep 6
-              echo "== timezone: clearing the prefill, then typing utc"
-              type_clear utc
-              if await 'new hostname' 400; then
+              answer utc
+
+              g=0
+              while [ "$g" -lt 400 ]; do
+                grep -q 'new hostname' "$LOG" 2>/dev/null && break
+                sleep 5
+                g=$((g + 5))
+              done
+              echo "waited ${g}s for the hostname prompt"
+              if grep -q 'new hostname' "$LOG" 2>/dev/null; then
                 sleep 6
-                echo "== hostname: clearing the prefill, then typing okra"
-                type_clear okra
-                if await 'new root password' 400; then
+                answer okra
+
+                g=0
+                while [ "$g" -lt 400 ]; do
+                  grep -q 'new root password' "$LOG" 2>/dev/null && break
+                  sleep 5
+                  g=$((g + 5))
+                done
+                echo "waited ${g}s for the password prompt"
+                if grep -q 'new root password' "$LOG" 2>/dev/null; then
                   sleep 6
-                  echo "== root password"
-                  type_clear okra
-                  if await 'root password again' 400; then
+                  answer okra
+
+                  g=0
+                  while [ "$g" -lt 400 ]; do
+                    grep -q 'root password again' "$LOG" 2>/dev/null && break
+                    sleep 5
+                    g=$((g + 5))
+                  done
+                  echo "waited ${g}s for the repeat"
+                  if grep -q 'root password again' "$LOG" 2>/dev/null; then
                     sleep 6
-                    echo "== root password again"
-                    type_clear okra
+                    answer okra
                   fi
                 fi
               fi
             fi
-            sleep 600
-          ) &
+            sleep 300
+          ) > "$DRIVER" 2>&1 &
 
           timeout "${SECONDS_TO_RUN:-1500}" qemu-system-x86_64 \
             -m 2048 -smp 2 -accel tcg \
@@ -136,6 +152,9 @@ jobs:
             < /dev/null > "$LOG" 2>&1 || true
 
           echo "== $(wc -l < "$LOG") lines of serial output"
+          echo
+          echo "== what the driver did"
+          cat "$DRIVER" 2>/dev/null || echo "  (no driver log)"
           echo
           echo "== from the first prompt on"
           N=$(grep -n 'Please configure the system' "$LOG" | head -1 | cut -d: -f1 || true)
@@ -153,18 +172,17 @@ jobs:
           [ -f "$LOG" ] || { echo "no serial log was produced"; exit 0; }
           echo "== how far the setup got"
           for Mark in 'timezone name or number' 'new hostname' 'new root password' \
-                      'root password again' 'Invalid input' 'complete' 'login'; do
+                      'root password again' 'Invalid input' 'Completed' 'login'; do
             printf '  %-26s %s\n' "$Mark" "$(grep -c "$Mark" "$LOG" 2>/dev/null || true)"
           done
-          echo
-          echo "== the tail"
-          tail -25 "$LOG" || true
 
-      - name: Upload the log
+      - name: Upload the logs
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: okra-setup-serial-log
-          path: ${{ runner.temp }}/serial.log
+          path: |
+            ${{ runner.temp }}/serial.log
+            ${{ runner.temp }}/driver.log
           if-no-files-found: warn
           retention-days: 14
