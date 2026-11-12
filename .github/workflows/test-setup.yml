@@ -123,6 +123,7 @@ jobs:
             -m 2048 -smp 2 -accel tcg \
             -cdrom "$RUNNER_TEMP/okra-linux.iso" -boot d \
             -display none -serial stdio -no-reboot \
+            < "$FIFO" \
             > "$LOG" 2>&1 || true
 
           kill "$Driver" 2>/dev/null || true
