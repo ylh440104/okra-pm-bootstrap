@@ -248,6 +248,17 @@ jobs:
             echo "== wants link after add-wants: $([ -e "$ROOTFS/etc/systemd/system/sysinit.target.wants/systemd-udevd.service" ] && echo yes || echo no)"
 
           fi
+          # systemd install creates a symlink to /dev/null under
+          # /etc/systemd/system for every unit the build turned off,
+          # and these travel into the image. PID 1 then reads them at
+          # startup, masks the units, and reports them as "not loaded".
+          # The meson log says which ones, but the simplest thing that
+          # works is to delete every dead link - one whose target does
+          # not exist - from the whole /etc/systemd/system tree, and then
+          # let systemd wire the ones that are actually there.
+          sudo find "$ROOTFS/etc/systemd/system" -xtype l -delete 2>/dev/null || true
+          echo "== dead links removed, entries left:" \
+            "$(find "$ROOTFS/etc/systemd/system" -type l 2>/dev/null | wc -l)"
           sudo mksquashfs "$ROOTFS" "$ISO_ROOT/LiveOS/rootfs.squashfs" \
             -comp zstd -noappend -no-progress -all-root -quiet
           echo "== the live root image"
