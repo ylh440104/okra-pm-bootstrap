@@ -1,14 +1,18 @@
 name: Answer the Initial Setup in QEMU
 
-# Walks through systemd-firstboot.service: the timezone, the hostname and the
-# root password.
+# Walks through systemd-firstboot.service: timezone, hostname, root password.
 #
-# Two rounds of this did nothing at all, and the reason was in the shell
-# rather than the console: the send routine lived behind a helper that used
-# local inside a subshell under set -u, so the branch that was meant to type
-# never ran and the log shows the prompts with no keystrokes after them. The
-# body is written out flat here, and every step prints what it saw first, so
-# the next log says whether it is the waiting or the typing that fails.
+# Getting here took three tries, and the sources settled the last two points:
+#
+# - The console accepts either \n or \r. Both break the line in
+#   ask_string_full, so the terminator was never the problem.
+# - The timezone prompt arrives prefilled with the preselected completion, so
+#   the field already holds UTC and an answer sent on top of it reads UTCUTC.
+# - Feeding the serial port works; QEMU's sendkey does not, because that
+#   drives the PS/2 keyboard while this console is on ttyS0.
+#
+# So the bytes go to the serial port, each answer starts with Ctrl-U to clear
+# the prefilled text, and each question is awaited by its own wording.
 
 on:
   workflow_dispatch:
@@ -40,8 +44,7 @@ jobs:
           fi
           APT_OPTS="-o Acquire::Retries=5 -o Acquire::http::Timeout=30"
           sudo apt-get $APT_OPTS update
-          sudo apt-get $APT_OPTS install -y --no-install-recommends \
-            qemu-system-x86 socat
+          sudo apt-get $APT_OPTS install -y --no-install-recommends qemu-system-x86
 
       - name: Get the ISO
         env:
@@ -56,123 +59,96 @@ jobs:
       - name: Boot it and answer the questions
         env:
           SECONDS_TO_RUN: ${{ github.event.inputs.seconds }}
-          MON: ${{ runner.temp }}/monitor.sock
+          FIFO: ${{ runner.temp }}/serial.in
           LOG: ${{ runner.temp }}/serial.log
           DRIVER: ${{ runner.temp }}/driver.log
         run: |
           set -uo pipefail
-          rm -f "$MON" "$LOG" "$DRIVER"
+          rm -f "$FIFO" "$LOG" "$DRIVER"
+          mkfifo "$FIFO"
 
-          (
-            # Give QEMU time to create the monitor socket.
-            i=0
-            while [ "$i" -lt 120 ]; do
-              [ -S "$MON" ] && break
-              sleep 2
-              i=$((i + 2))
+          # Two separate writers, because the reader has to be free to look at
+          # the log while the fifo is still open: the shell opens the fifo for
+          # writing only once, and a single process doing both would block on
+          # the open before QEMU ever started.
+          driver() {
+            sleep 30
+            waited=0
+            while [ "$waited" -lt 900 ]; do
+              grep -q "timezone name or number" "$LOG" 2>/dev/null && break
+              sleep 4
+              waited=$((waited + 4))
             done
-            echo "monitor socket: $([ -S "$MON" ] && echo up || echo missing)"
-
-            key() {
-              printf 'sendkey %s\n' "$1" | socat - "UNIX-CONNECT:$MON" 2>/dev/null
-              sleep 0.4
-            }
-
-            # Ctrl-U empties the field, because the prompt arrives prefilled
-            # with the preselected completion.
-            answer() {
-              echo "typing: $1"
-              key ctrl-u
-              sleep 0.6
-              j=0
-              while [ "$j" -lt "${#1}" ]; do
-                key "$(printf '%s' "$1" | cut -c$((j + 1)))"
-                j=$((j + 1))
-              done
-              sleep 0.4
-              key ret
-            }
-
-            # Poll for a line to show up, without local and without a subshell.
-            g=0
-            while [ "$g" -lt 900 ]; do
-              grep -q 'timezone name or number' "$LOG" 2>/dev/null && break
-              sleep 5
-              g=$((g + 5))
+            echo "first prompt after ${waited}s" >&2
+            grep -q "timezone name or number" "$LOG" 2>/dev/null || return 1
+            sleep 5
+            printf "\025"; sleep 1; printf "utc\r"; echo "typed: utc" >&2
+            waited=0
+            while [ "$waited" -lt 400 ]; do
+              grep -q "new hostname" "$LOG" 2>/dev/null && break
+              sleep 4
+              waited=$((waited + 4))
             done
-            echo "waited ${g}s for the first prompt"
-            if grep -q 'timezone name or number' "$LOG" 2>/dev/null; then
-              sleep 6
-              answer utc
-
-              g=0
-              while [ "$g" -lt 400 ]; do
-                grep -q 'new hostname' "$LOG" 2>/dev/null && break
-                sleep 5
-                g=$((g + 5))
-              done
-              echo "waited ${g}s for the hostname prompt"
-              if grep -q 'new hostname' "$LOG" 2>/dev/null; then
-                sleep 6
-                answer okra
-
-                g=0
-                while [ "$g" -lt 400 ]; do
-                  grep -q 'new root password' "$LOG" 2>/dev/null && break
-                  sleep 5
-                  g=$((g + 5))
-                done
-                echo "waited ${g}s for the password prompt"
-                if grep -q 'new root password' "$LOG" 2>/dev/null; then
-                  sleep 6
-                  answer okra
-
-                  g=0
-                  while [ "$g" -lt 400 ]; do
-                    grep -q 'root password again' "$LOG" 2>/dev/null && break
-                    sleep 5
-                    g=$((g + 5))
-                  done
-                  echo "waited ${g}s for the repeat"
-                  if grep -q 'root password again' "$LOG" 2>/dev/null; then
-                    sleep 6
-                    answer okra
-                  fi
-                fi
-              fi
-            fi
-            sleep 300
-          ) > "$DRIVER" 2>&1 &
+            echo "hostname prompt after ${waited}s" >&2
+            grep -q "new hostname" "$LOG" 2>/dev/null || return 1
+            sleep 5
+            printf "\025"; sleep 1; printf "okra\r"; echo "typed: okra" >&2
+            waited=0
+            while [ "$waited" -lt 400 ]; do
+              grep -q "new root password" "$LOG" 2>/dev/null && break
+              sleep 4
+              waited=$((waited + 4))
+            done
+            echo "password prompt after ${waited}s" >&2
+            grep -q "new root password" "$LOG" 2>/dev/null || return 1
+            sleep 5
+            printf "\025"; sleep 1; printf "okra\r"; echo "typed: okra (password)" >&2
+            waited=0
+            while [ "$waited" -lt 400 ]; do
+              grep -q "root password again" "$LOG" 2>/dev/null && break
+              sleep 4
+              waited=$((waited + 4))
+            done
+            echo "repeat prompt after ${waited}s" >&2
+            grep -q "root password again" "$LOG" 2>/dev/null || return 1
+            sleep 5
+            printf "\025"; sleep 1; printf "okra\r"; echo "typed: okra (again)" >&2
+            sleep 200
+          }
+          
+          driver > "$FIFO" 2> "$DRIVER" &
+          Driver=$!
 
           timeout "${SECONDS_TO_RUN:-1500}" qemu-system-x86_64 \
             -m 2048 -smp 2 -accel tcg \
             -cdrom "$RUNNER_TEMP/okra-linux.iso" -boot d \
             -display none -serial stdio -no-reboot \
-            -monitor "unix:$MON,server,nowait" \
-            < /dev/null > "$LOG" 2>&1 || true
+            > "$LOG" 2>&1 || true
 
-          echo "== $(wc -l < "$LOG") lines of serial output"
-          echo
-          echo "== what the driver did"
-          cat "$DRIVER" 2>/dev/null || echo "  (no driver log)"
-          echo
-          echo "== from the first prompt on"
-          N=$(grep -n 'Please configure the system' "$LOG" | head -1 | cut -d: -f1 || true)
-          if [ -n "${N:-}" ]; then
-            sed -n "$N,\$p" "$LOG" | head -70
-          else
-            tail -40 "$LOG"
-          fi
+          kill "$Driver" 2>/dev/null || true
+          rm -f "$FIFO"
 
       - name: Say what happened
         if: always()
         run: |
           set -uo pipefail
           LOG="$RUNNER_TEMP/serial.log"
-          [ -f "$LOG" ] || { echo "no serial log was produced"; exit 0; }
-          echo "== how far the setup got"
+          DRIVER="$RUNNER_TEMP/driver.log"
+          echo "== what the driver did"
+          cat "$DRIVER" 2>/dev/null || echo "  (no driver log)"
+          echo
+          echo "== from the first prompt on"
+          N=$(grep -n 'Please configure the system' "$LOG" 2>/dev/null | head -1 | cut -d: -f1 || true)
+          if [ -n "${N:-}" ]; then
+            sed -n "$N,\$p" "$LOG" | head -60
+          else
+            echo "  (the setup banner never appeared)"
+            tail -20 "$LOG" 2>/dev/null || true
+          fi
+          echo
+          echo "== how far it got"
           for Mark in 'timezone name or number' 'new hostname' 'new root password' \
-                      'root password again' 'Invalid input' 'Completed' 'login'; do
+                      'root password again' 'Invalid input' 'login'; do
             printf '  %-26s %s\n' "$Mark" "$(grep -c "$Mark" "$LOG" 2>/dev/null || true)"
           done
 
