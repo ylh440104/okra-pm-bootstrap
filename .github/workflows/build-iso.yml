@@ -263,8 +263,17 @@ jobs:
           # service and opens this file directly; when it is absent the
           # generator fails and says so on every boot. Building it here also
           # means the boot-time update service finds nothing stale to redo.
-          sudo chroot "$ROOTFS" /usr/bin/systemd-hwdb update
+          #
+          # systemd-hwdb reopens each source file through /proc/self/fd/N, so a
+          # chroot without proc behind it compiles nothing and still exits 0 -
+          # the result is a 105-byte database that looks built. Give it proc to
+          # read through, and let --strict turn a failure to read a file into a
+          # failed step instead of an empty database.
+          sudo mount -t proc proc "$ROOTFS/proc" 2>/dev/null || true
+          sudo chroot "$ROOTFS" /usr/bin/systemd-hwdb --strict update
+          sudo umount "$ROOTFS/proc" 2>/dev/null || true
           ls -l "$ROOTFS/etc/udev/hwdb.bin"
+          test "$(stat -c %s "$ROOTFS/etc/udev/hwdb.bin")" -gt 100000
           # The units the live init masks on purpose. The first boot presets
           # every unit in the search path, meets these masks, and logs a
           # failure for each one. Saying disable here states the same intent
