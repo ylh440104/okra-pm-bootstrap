@@ -1,0 +1,199 @@
+name: Install to a blank disk and boot what it wrote
+
+# The end-to-end acceptance of the installer. A blank virtio disk is attached,
+# the ISO boots its installer entry through the GRUB menu, stage 1 partitions
+# and copies the Base OS, and the test then boots the written disk directly and
+# watches for the phase-2 marker. The live medium is removed for the second
+# boot, so what comes up is only what the installer wrote.
+
+on:
+  workflow_dispatch:
+    inputs:
+      seconds:
+        description: 'Seconds per QEMU run'
+        default: '1500'
+
+permissions:
+  contents: read
+
+env:
+  ISO_NAME: okra-linux.iso
+
+jobs:
+  install:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - name: Install what the test needs
+        run: |
+          set -euo pipefail
+          sudo apt-get update -o Acquire::Retries=5
+          sudo apt-get install -y --no-install-recommends \
+            qemu-system-x86 fuse2fs coreutils
+
+      - name: Get the ISO
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          curl -fsSL --retry 3 -m 900 -H "Authorization: token $GH_TOKEN" \
+            -o "$RUNNER_TEMP/okra-linux.iso" \
+            "https://github.com/ylh440104/okra-pm-bootstrap/releases/download/okra-linux-iso/okra-linux.iso"
+          ls -l "$RUNNER_TEMP/okra-linux.iso"
+
+      - name: Install through the menu
+        env:
+          SECONDS_TO_RUN: ${{ github.event.inputs.seconds }}
+          FIFO: ${{ runner.temp }}/serial.in
+          LOG: ${{ runner.temp }}/install.log
+          DRIVER: ${{ runner.temp }}/driver.log
+          DISK: ${{ runner.temp }}/disk.img
+        run: |
+          set -uo pipefail
+          truncate -s 12G "$DISK"
+          rm -f "$FIFO" "$LOG" "$DRIVER"
+          mkfifo "$FIFO"
+
+          driver() {
+            await() {
+              waited=0
+              while [ "$waited" -lt "$2" ]; do
+                grep -q "$1" "$LOG" 2>/dev/null && return 0
+                sleep 4
+                waited=$((waited + 4))
+              done
+              echo "  (never saw: $1)" >&2
+              return 1
+            }
+
+            send_key() {
+              printf '%b' "$1"
+            }
+
+            # GRUB: the installer is the second entry.
+            sleep 30
+            if await 'Okra Linux' 300; then
+              sleep 3
+              send_key '\033[B'
+              sleep 1
+              send_key '\r'
+              echo "  picked the installer entry" >&2
+            fi
+
+            # The installer asks which stage to start, then which disk. The
+            # blank virtio disk is the only one, so the first menu choice is
+            # right, and the confirmation is the y the prompt suggests.
+            if await 'Start stage 1' 900; then
+              sleep 3
+              send_key '\r'
+              echo "  confirmed stage 1" >&2
+            fi
+            if await 'Select disk' 900; then
+              sleep 3
+              send_key '\r'
+              echo "  chose the only disk" >&2
+            fi
+            if await 'Erase the whole disk' 900; then
+              sleep 3
+              send_key 'y'
+              send_key '\r'
+              echo "  agreed to erase" >&2
+            fi
+            if await 'Write the Base OS' 900; then
+              sleep 3
+              send_key '\r'
+              echo "  started the write" >&2
+            fi
+            sleep 300
+          }
+
+          driver > "$FIFO" 2> "$DRIVER" &
+
+          timeout "${SECONDS_TO_RUN:-1500}" qemu-system-x86_64 \
+            -m 2048 -smp 2 -accel tcg \
+            -cdrom "$RUNNER_TEMP/okra-linux.iso" -boot d \
+            -drive "file=$DISK,format=raw,if=virtio" \
+            -display none -serial stdio -no-reboot \
+            < "$FIFO" \
+            > "$LOG" 2>&1 || true
+
+          kill "$(jobs -p)" 2>/dev/null || true
+          rm -f "$FIFO"
+
+      - name: Say what the install did
+        if: always()
+        run: |
+          set -uo pipefail
+          echo "== what the driver did"
+          cat "$RUNNER_TEMP/driver.log" 2>/dev/null || true
+          echo
+          echo "== the install serial, milestones"
+          grep -nE 'LiveCD init|okrainstall|Stage|stage|partitio|error|Error|failed|FAILED' \
+            "$RUNNER_TEMP/install.log" 2>/dev/null | tail -40 || true
+          echo
+          echo "== the last lines"
+          tail -20 "$RUNNER_TEMP/install.log" 2>/dev/null || true
+
+      - name: Check the disk got a system
+        if: always()
+        run: |
+          set -uo pipefail
+          DISK="$RUNNER_TEMP/disk.img"
+          ls -l "$DISK"
+          echo "== partition table"
+          sfdisk -d "$DISK" 2>/dev/null || true
+
+          echo "== phase marker on the installed disk"
+          start_sector=$(sfdisk -d "$DISK" 2>/dev/null \
+            | sed -n 's/.*start=[[:space:]]*\([0-9][0-9]*\).*type=0FC63DAF.*/\1/p' | head -n 1)
+          if [ -n "$start_sector" ]; then
+            OFFSET=$((start_sector * 512))
+            MNT=$(mktemp -d)
+            if fuse2fs -o "ro,offset=$OFFSET" "$DISK" "$MNT" 2>/dev/null; then
+              echo "phase: $(tr -d '[:space:]' < "$MNT/var/lib/okrainstall/phase" 2>/dev/null || echo missing)"
+              test -x "$MNT/usr/bin/okrainstall" && echo "okrainstall present" || echo "okrainstall MISSING"
+              test -f "$MNT/boot/vmlinuz" && echo "kernel present" || echo "kernel MISSING"
+              test -f "$MNT/etc/fstab" && echo "fstab present" || echo "fstab MISSING"
+              test -f "$MNT/usr/lib/okrainstall/grub/BOOTX64.EFI" && echo "EFI binary present" || echo "EFI binary MISSING"
+              fusermount -u "$MNT" || fusermount3 -u "$MNT" || true
+            else
+              echo "fuse2fs could not mount the root partition"
+            fi
+            rmdir "$MNT" 2>/dev/null || true
+          else
+            echo "no root partition found - the install did not partition the disk"
+          fi
+
+      - name: Boot what the installer wrote
+        env:
+          SECONDS_TO_RUN: 900
+          BOOTLOG: ${{ runner.temp }}/boot.log
+          DISK: ${{ runner.temp }}/disk.img
+        run: |
+          set -uo pipefail
+          # The kernel the installer copied is what starts here, straight from
+          # the written disk: no medium, no host kernel. What boots is only what
+          # stage 1 put there.
+          timeout 900 qemu-system-x86_64 \
+            -m 2048 -smp 2 -accel tcg \
+            -drive "file=$DISK,format=raw,if=virtio" \
+            -bios /usr/share/qemu/OVMF.fd \
+            -display none -serial stdio -no-reboot \
+            > "$BOOTLOG" 2>&1 || true
+
+          echo "== what the written disk said"
+          grep -nE 'okrainstall|phase|Stage|FAILED|error' "$BOOTLOG" 2>/dev/null | head -30 || true
+          echo
+          tail -30 "$BOOTLOG" 2>/dev/null || true
+
+      - name: Upload the logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: okra-install-diag
+          path: |
+            ${{ runner.temp }}/install.log
+            ${{ runner.temp }}/boot.log
+            ${{ runner.temp }}/driver.log
+          if-no-files-found: warn
+          retention-days: 14
