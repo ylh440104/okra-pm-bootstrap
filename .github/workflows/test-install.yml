@@ -70,15 +70,15 @@ jobs:
               printf '%b' "$1"
             }
 
-            # GRUB: the menu is on the serial line too; the installer is the
-            # second of three entries.
-            sleep 25
-            if await 'Okra Linux installer' 300; then
-              sleep 3
-              send_key '\033[B'
-              sleep 1
-              send_key '\r'
-              echo "  picked the installer entry" >&2
+            # GRUB: the menu is on the serial line too. It is a plain-ASCII terminal,
+            # so an arrow-key escape is not a key at all there - the first
+            # attempt sent one and the countdown ran out with the default
+            # entry. A digit selects and boots an entry immediately.
+            sleep 20
+            if await 'Okra Linux installer' 240; then
+              sleep 2
+              send_key '2'
+              echo "  selected the installer entry by number" >&2
             fi
 
             # Stage 1 introduces itself and asks to start.
