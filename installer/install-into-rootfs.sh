@@ -25,12 +25,15 @@ ln -sfn /usr/lib/systemd/system/okrainstall-live.service \
 rm -f "$ROOTFS/etc/systemd/system/multi-user.target.wants/okrainstall.service"
 rm -f "$ROOTFS/etc/systemd/system/multi-user.target.wants/okrainstall-continue.service"
 
-mkdir -p "$ROOTFS/etc/systemd/system/getty.target.wants"
-rm -f "$ROOTFS/etc/systemd/system/getty.target.wants/getty@tty1.service"
-ln -sfn /usr/lib/systemd/system/getty@.service \
-    "$ROOTFS/etc/systemd/system/getty.target.wants/getty@tty2.service"
-ln -sfn /usr/lib/systemd/system/getty@.service \
-    "$ROOTFS/etc/systemd/system/getty.target.wants/getty@tty3.service"
+# The getty links on tty2 and tty3 existed so a person installing could switch
+# virtual terminals and get a shell. On a machine the operator reaches over
+# serial there is no second terminal to switch to: the gettys still start,
+# print the issue into the same console the installer is drawing on, and race
+# it for the input. Nothing is lost by not having them - the installer hands
+# the machine over when it is done, and the live shell is the default boot.
+rm -f "$ROOTFS/etc/systemd/system/getty.target.wants/getty@tty1.service" \
+      "$ROOTFS/etc/systemd/system/getty.target.wants/getty@tty2.service" \
+      "$ROOTFS/etc/systemd/system/getty.target.wants/getty@tty3.service"
 
 # Remove obsolete single-shot unit if present from older installs.
 rm -f "$ROOTFS/usr/lib/systemd/system/okrainstall.service"

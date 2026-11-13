@@ -118,8 +118,15 @@ jobs:
               send_key 'y'
               echo "  started the write" >&2
             fi
+            # The shell answering alongside the installer is how the last
+            # run died: two programs read one tty and the wrong one got the
+            # key. If the shell prompt appears the mask in the init did not
+            # hold, and knowing that here beats finding it out afterwards.
             if await 'Stage 1 done' 1800; then
               echo "  stage 1 completed" >&2
+            fi
+            if grep -q 'root@okra' "$LOG" 2>/dev/null; then
+              echo "  WARNING: the autologin shell is up with the installer - the init mask did not hold" >&2
             fi
             sleep 90
           }
