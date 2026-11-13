@@ -85,6 +85,7 @@ Replacement = [
     "if [ -x /newroot/usr/bin/okrainstall ] && \\",
     "        grep -q okra.install /proc/cmdline 2>/dev/null; then",
     "    rm -f /newroot/etc/systemd/system/multi-user.target.wants/autologin-console.service",
+    "    rm -f /newroot/etc/systemd/system/autologin-console.service",
     "    ln -sf /dev/null /newroot/etc/systemd/system/autologin-console.service",
     "else",
     SourceLines[LinkStart],
