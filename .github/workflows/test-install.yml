@@ -127,8 +127,13 @@ jobs:
             fi
             if grep -q 'root@okra' "$LOG" 2>/dev/null; then
               echo "  WARNING: the autologin shell is up with the installer - the init mask did not hold" >&2
+              # The shell is alive, so ask it directly what is running and
+              # whether the mask the init should have written exists.
+              send_key 'systemctl status autologin-console.service --no-pager 2>&1 | head -5; ls -l /etc/systemd/system/autologin-console.service; systemctl list-units --type=service --state=running --no-pager | head -15\r'
+              echo "  asked the shell what is running" >&2
+              sleep 20
             fi
-            sleep 90
+            sleep 60
           }
           driver > "$FIFO" 2> "$DRIVER" &
 
