@@ -388,8 +388,8 @@ jobs:
           # system boots through it and the live ISO's own boot sector is on the
           # medium being removed. Standalone grub carries its own modules and its
           # own config, so the disk needs nothing else from this build.
-          mkdir -p "$ROOTFS/usr/lib/okrainstall/grub"
-          grub-mkstandalone \
+          sudo mkdir -p "$ROOTFS/usr/lib/okrainstall/grub"
+          sudo grub-mkstandalone \
             --format=x86_64-efi \
             --output="$ROOTFS/usr/lib/okrainstall/grub/BOOTX64.EFI" \
             --modules="part_gpt part_msdos ext2 fat normal linux search search_fs_uuid configfile echo all_video gfxterm" \
