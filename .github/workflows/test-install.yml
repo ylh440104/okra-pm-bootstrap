@@ -70,9 +70,10 @@ jobs:
               printf '%b' "$1"
             }
 
-            # GRUB: the installer is the second entry.
-            sleep 30
-            if await 'Okra Linux' 300; then
+            # GRUB: the menu is on the serial line too; the installer is the
+            # second of three entries.
+            sleep 25
+            if await 'Okra Linux installer' 300; then
               sleep 3
               send_key '\033[B'
               sleep 1
@@ -80,31 +81,32 @@ jobs:
               echo "  picked the installer entry" >&2
             fi
 
-            # The installer asks which stage to start, then which disk. The
-            # blank virtio disk is the only one, so the first menu choice is
-            # right, and the confirmation is the y the prompt suggests.
+            # Stage 1 introduces itself and asks to start.
             if await 'Start stage 1' 900; then
               sleep 3
               send_key '\r'
               echo "  confirmed stage 1" >&2
             fi
-            if await 'Select disk' 900; then
+            # The blank virtio disk is the only one offered.
+            if await 'Choose the disk to use' 900; then
               sleep 3
               send_key '\r'
               echo "  chose the only disk" >&2
             fi
             if await 'Erase the whole disk' 900; then
               sleep 3
-              send_key 'y'
               send_key '\r'
-              echo "  agreed to erase" >&2
+              echo "  took the default erase answer" >&2
             fi
             if await 'Write the Base OS' 900; then
               sleep 3
               send_key '\r'
               echo "  started the write" >&2
             fi
-            sleep 300
+            if await 'Stage 1 done' 1200; then
+              echo "  stage 1 completed" >&2
+            fi
+            sleep 120
           }
 
           driver > "$FIFO" 2> "$DRIVER" &

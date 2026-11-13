@@ -412,24 +412,32 @@ jobs:
           export ISO_IMAGE="$RUNNER_TEMP/okra-linux.iso"
           mkdir -p "$ISO_ROOT/boot/grub"
           cat > "$ISO_ROOT/boot/grub/grub.cfg" <<'GRUBCFG'
-          set timeout=10
+          # The menu is drawn on the serial line as well as the screen. A
+          # machine answered over serial - which is every automated test, and
+          # plenty of real servers - would otherwise watch the timeout run out
+          # and take the default with no way to say otherwise.
+          set timeout=20
           set default=0
-          insmod all_video
-          insmod gfxterm
-          terminal_output gfxterm
+          serial --unit=0 --speed=115200
+          terminal_input console serial
+          terminal_output console serial
 
           # The installer is a choice at the menu rather than the only thing that
           # happens. A machine that boots to a menu nobody answers ends up in the
           # first entry, which is a shell; someone who wants to install picks it
           # and gets okra.install on the command line, and the live init starts
           # the installer only then.
+          #
+          # The installer entry carries no console=tty0. The installer picks its
+          # terminal from the kernel command line, and with both named it draws
+          # to the virtual one - where a serial operator cannot follow it.
           menuentry "Okra Linux" {
               linux /boot/vmlinuz console=tty0 console=ttyS0,115200n8 nomodeset loglevel=6 systemd.show_status=yes rd.live.image
               initrd /boot/initramfs-live.img
           }
 
           menuentry "Okra Linux installer" {
-              linux /boot/vmlinuz console=tty0 console=ttyS0,115200n8 nomodeset loglevel=6 systemd.show_status=yes rd.live.image okra.install
+              linux /boot/vmlinuz console=ttyS0,115200n8 nomodeset loglevel=6 systemd.show_status=yes rd.live.image okra.install
               initrd /boot/initramfs-live.img
           }
 
