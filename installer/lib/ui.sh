@@ -202,13 +202,29 @@ ui_menu() {
                 sel=$((sel + 1))
                 [ "$sel" -ge ${#items[@]} ] && sel=0
                 ;;
-            enter|yes)
+            enter)
                 UI_CHOICE=${items[$sel]}
                 ui_restore_term
                 ui_out $'\033[?25l'
                 return 0
                 ;;
-            quit|esc|no)
+            # y and n answer the question, not the highlight. A person reading
+            # "Start stage 1?" presses y meaning yes even when the bar is on No,
+            # and the driver of the install test does exactly that. Treating y as
+            # Enter chose the highlighted item and cancelled every run.
+            yes)
+                UI_CHOICE=Yes
+                ui_restore_term
+                ui_out $'\033[?25l'
+                return 0
+                ;;
+            no)
+                UI_CHOICE=No
+                ui_restore_term
+                ui_out $'\033[?25l'
+                return 0
+                ;;
+            quit|esc)
                 ui_restore_term
                 return 1
                 ;;
