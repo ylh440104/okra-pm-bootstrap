@@ -3,6 +3,15 @@
 
 stage1_live() {
     local src
+
+    # Somebody has to be able to see and answer the menu. On a machine with no
+    # virtual terminal in use and no serial console there is nobody, and drawing
+    # anyway would hold the console against the shell that could have been used.
+    if ! ui_tty; then
+        printf 'okrainstall: no console to draw on, leaving the shell its tty\n' >/dev/kmsg 2>/dev/null || true
+        return 0
+    fi
+
     src=$(find_live_root) || die "live rootfs not found (expected $LIVE_ROOT)"
 
     ui_text 1 'Live CD' \

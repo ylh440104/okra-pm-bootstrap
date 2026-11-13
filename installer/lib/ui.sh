@@ -13,26 +13,34 @@ UI_BAR_WIDTH=46
 # Only when a virtual terminal is what the operator is looking at. A machine
 # reached over a serial line has no tty1 in front of anyone, and moving the
 # stream there hid the installer from the only console that could answer it.
+# That is also why this returns a status: when there is no usable terminal the
+# caller must not draw anything, or it takes the console hostage and the shell
+# that could have answered never appears.
 ui_claim_console() {
     [ -n "${UI_CLAIMED+x}" ] && return 0
     UI_CLAIMED=1
-    if [ -w /proc/sys/kernel/printk ]; then
-        printf '1 4 1 7\n' >/proc/sys/kernel/printk 2>/dev/null || true
-    fi
-    # A serial console is detected by the device the service was handed. When
-    # stdin is already a terminal, believe it and stay where we are.
     local target=tty1
     if [ -n "${OKRAINSTALL_TTY:-}" ]; then
         target=$OKRAINSTALL_TTY
-    elif [ -t 0 ] && [ -c /dev/console ] && ! [ -c /dev/tty1 ]; then
-        target=console
     fi
-    if [ "$target" != console ] && [ -w /sys/class/tty/tty0/active ]; then
-        printf '%s\n' "${target#tty}" >/sys/class/tty/tty0/active 2>/dev/null || true
+    # The console the kernel named on its own command line is the one with a
+    # reader. tty1 exists on every machine, including the ones nobody is in
+    # front of, so its presence says nothing.
+    local cmdline
+    cmdline=$(cat /proc/cmdline 2>/dev/null || true)
+    case " $cmdline " in
+        *" console=ttyS"*" console=tty0 "*|*" console=tty0 "*" console=ttyS"*) ;;
+        *" console=ttyS"*) target=ttyS0 ;;
+    esac
+    if [ ! -c "/dev/$target" ]; then
+        return 1
     fi
-    if [ -c "/dev/$target" ]; then
-        exec <"/dev/$target" >"/dev/$target" 2>&1 || true
+    UI_TARGET=$target
+    if [ "$target" = tty1 ] && [ -w /sys/class/tty/tty0/active ]; then
+        printf '1\n' >/sys/class/tty/tty0/active 2>/dev/null || true
     fi
+    exec <"/dev/$target" >"/dev/$target" 2>&1 || true
+    [ -t 1 ]
 }
 
 ui_restore_term() {

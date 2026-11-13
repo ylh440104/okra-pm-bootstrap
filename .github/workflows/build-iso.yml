@@ -295,9 +295,11 @@ jobs:
           disable serial-getty@ttyS0.service
           disable console-getty.service
           disable debug-shell.service
+          disable autologin-console.service
           disable systemd-ask-password-console.path
           disable systemd-ask-password-console.service
           disable ldconfig.service
+          disable okrainstall-live.service
           ignore -.mount
           PRESET
           cat "$ROOTFS/usr/lib/systemd/system-preset/50-okra-live.preset"
