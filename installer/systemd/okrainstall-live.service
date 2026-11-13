@@ -1,0 +1,27 @@
+[Unit]
+Description=OKRAINSTALL LiveCD stage 1
+Documentation=file:///usr/lib/okrainstall
+After=systemd-user-sessions.service local-fs.target
+Before=getty@tty1.service
+ConditionPathExists=/usr/bin/okrainstall
+ConditionPathExists=/run/live/rootfs
+Conflicts=getty@tty1.service kanina-live.service kanina-tui.service okrainstall-continue.service
+[Service]
+Type=simple
+Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+# The console someone is watching is the one the kernel was told to use. A
+# machine on the VGA header expects tty1; a machine reached over serial has
+# nothing on tty1. The image writes this drop-in when it picks the latter, so
+# the installer is not left drawing on a screen that has no one in front of it.
+Environment=OKRAINSTALL_TTY=tty1
+ExecStart=/usr/bin/okrainstall
+StandardInput=tty
+StandardOutput=tty
+StandardError=tty
+TTYPath=/dev/tty1
+TTYReset=yes
+TTYVHangup=yes
+TTYVTDisallocate=yes
+Restart=no
+[Install]
+WantedBy=multi-user.target

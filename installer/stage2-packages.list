@@ -1,0 +1,5 @@
+# Packages installed during stage 2 (one name per line).
+# Requires lunar on the Base-OS image. Empty / comments are skipped.
+# Example:
+# GNU.coreutils
+# net.dhcpcd

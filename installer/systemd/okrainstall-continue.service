@@ -1,0 +1,27 @@
+[Unit]
+Description=OKRAINSTALL continue (Base-OS stage 2 / Final-OS stage 3)
+Documentation=file:///usr/lib/okrainstall
+After=local-fs.target
+# Do not wait for network-online or systemd-user-sessions. user-sessions is
+# After=network.target, so the installer would stay invisible until DHCP
+# finishes. Stage 2 waits for a default route itself.
+Before=getty@tty1.service
+ConditionPathExists=/usr/bin/okrainstall
+ConditionPathExists=/var/lib/okrainstall/phase
+Conflicts=getty@tty1.service okrainstall-live.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+ExecStart=/usr/bin/okrainstall --continue
+StandardInput=tty
+StandardOutput=tty
+StandardError=tty
+TTYPath=/dev/tty1
+TTYReset=yes
+TTYVHangup=yes
+TTYVTDisallocate=yes
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,120 @@
+#!/bin/bash
+# OKRAINSTALL — three-reboot OkraLinux installer.
+#
+# LiveCD  [phase absent + live] → stage 1 → write phase=2 → reboot
+# Base-OS [phase=2]             → stage 2 → write phase=3 → reboot
+# Final   [phase=3]             → stage 3 → delete marker  → done
+set -euo pipefail
+
+LIB_DIR=
+if [ -d /usr/lib/okrainstall ]; then
+    LIB_DIR=/usr/lib/okrainstall
+else
+    LIB_DIR=$(cd "$(dirname "$0")/../lib" && pwd)
+fi
+
+# shellcheck source=/dev/null
+source "$LIB_DIR/common.sh"
+# shellcheck source=/dev/null
+source "$LIB_DIR/ui.sh"
+# shellcheck source=/dev/null
+source "$LIB_DIR/stage1-live.sh"
+# shellcheck source=/dev/null
+source "$LIB_DIR/stage2-base.sh"
+# shellcheck source=/dev/null
+source "$LIB_DIR/stage3-final.sh"
+
+usage() {
+    cat <<EOF
+OKRAINSTALL $OKRAINSTALL_VERSION — OkraLinux installer (two reboots)
+
+Flow:
+  Live CD   stage 1  partition, copy Base OS, plant phase=2, reboot
+  Base OS   stage 2  drivers, repository, packages, phase=3, reboot
+  Final OS  stage 3  account, timezone, update, remove the installer
+
+Usage:
+  okrainstall              detect the environment and run the current stage
+  okrainstall --continue   continue on the installed disk (systemd)
+  okrainstall --stage N    force stage N (debug)
+  okrainstall -h|--help
+
+Markers:
+  /var/lib/okrainstall/phase      next stage (2 or 3)
+  /var/lib/okrainstall/state.env  state shared across stages
+EOF
+}
+
+dispatch() {
+    local phase mode=${1:-auto}
+
+    require_root
+
+    case "$mode" in
+        auto)
+            if is_live_environment; then
+                stage1_live
+                return
+            fi
+            phase=$(read_phase)
+            case "$phase" in
+                2) stage2_base ;;
+                3) stage3_final ;;
+                '')
+                    die 'not a live system and no phase marker. Boot the Live CD to reinstall.'
+                    ;;
+                *)
+                    die "unknown phase marker: $phase"
+                    ;;
+            esac
+            ;;
+        continue)
+            phase=$(read_phase)
+            case "$phase" in
+                2) stage2_base ;;
+                3) stage3_final ;;
+                '')
+                    log 'no phase marker; nothing to continue'
+                    exit 0
+                    ;;
+                *)
+                    die "unknown phase marker: $phase"
+                    ;;
+            esac
+            ;;
+        1) stage1_live ;;
+        2) stage2_base ;;
+        3) stage3_final ;;
+        *)
+            die "invalid mode: $mode"
+            ;;
+    esac
+}
+
+main() {
+    case "${1:-}" in
+        -h|--help)
+            usage
+            exit 0
+            ;;
+        --version)
+            printf '%s\n' "$OKRAINSTALL_VERSION"
+            exit 0
+            ;;
+        --continue)
+            dispatch continue
+            ;;
+        --stage)
+            [ -n "${2:-}" ] || die 'usage: okrainstall --stage 1|2|3'
+            dispatch "$2"
+            ;;
+        '')
+            dispatch auto
+            ;;
+        *)
+            die "unknown argument: $1 (try okrainstall --help)"
+            ;;
+    esac
+}
+
+main "$@"

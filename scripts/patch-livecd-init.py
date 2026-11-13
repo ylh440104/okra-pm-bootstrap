@@ -63,5 +63,36 @@ Addition = """ln -sf /dev/null /newroot/etc/systemd/system/getty@tty1.service
 assert Marker in Text, 'getty wants tail not found'
 Text = Text.replace(Marker, Marker + Addition, 1)
 
+# The link is two source lines: the command, then its indented destination.
+# Find them by shape instead of spelling the backslash into a literal.
+SourceLines = Text.split("\n")
+LinkStart = None
+for Index, Line in enumerate(SourceLines):
+    if Line.startswith("ln -sf /etc/systemd/system/autologin-console.service"):
+        LinkStart = Index
+        break
+assert LinkStart is not None, "autologin link not found"
+LinkEnd = LinkStart + 1
+assert "multi-user.target.wants/autologin-console.service" in SourceLines[LinkEnd], \
+    "autologin link destination not found"
+
+Replacement = [
+    "# Two programs want the console and only one can have it. With the installer",
+    "# present that is the installer: an unattended shell on the same tty would",
+    "# take the keystrokes meant for the menu. Without one the shell is what",
+    "# makes the image usable at all. The escape hatch, okra.noinstaller, keeps",
+    "# the shell on an image that carries the installer, which is how a boot can",
+    "# be inspected without installing anything.",
+    "if [ -x /newroot/usr/bin/okrainstall ] && \\",
+    "        ! grep -q okra.noinstaller /proc/cmdline 2>/dev/null; then",
+    "    ln -sf /dev/null /newroot/etc/systemd/system/autologin-console.service",
+    "else",
+    SourceLines[LinkStart],
+    SourceLines[LinkEnd],
+    "fi",
+]
+SourceLines[LinkStart:LinkEnd + 1] = Replacement
+Text = "\n".join(SourceLines)
+
 open(Path, 'w', encoding='utf-8').write(Text)
 print('init patched')

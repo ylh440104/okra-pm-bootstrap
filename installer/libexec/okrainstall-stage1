@@ -1,0 +1,515 @@
+#!/bin/bash
+# Stage 1 backend (LiveCD): format → copy Base-OS → plant OKRAINSTALL + phase=2 → GRUB.
+set -euo pipefail
+# The live service does not source /etc/profile. mount and umount live in /bin,
+# which is outside systemd's default PATH, so the TUI otherwise dies at line
+# "mount: command not found".
+export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin${PATH:+:$PATH}"
+trap 'echo "ERROR line $LINENO: $BASH_COMMAND" >&2' ERR
+
+DISK=''
+EFI=''
+ROOT=''
+FORMAT_ROOT=0
+WHOLE_DISK=0
+
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        --whole-disk) DISK="$2"; WHOLE_DISK=1; FORMAT_ROOT=1; shift 2 ;;
+        --disk) DISK="$2"; shift 2 ;;
+        --efi) EFI="$2"; shift 2 ;;
+        --root) ROOT="$2"; shift 2 ;;
+        --format-root) FORMAT_ROOT=1; shift ;;
+        -h|--help)
+            cat <<'EOF'
+Usage: okrainstall-stage1 --whole-disk DEV
+       okrainstall-stage1 --disk DEV --efi DEV --root DEV [--format-root]
+
+--whole-disk wipes DEV, writes a GPT (512MiB EFI + rest root), then copies
+Base-OS, plants OKRAINSTALL with phase=2, and installs GRUB.
+EOF
+            exit 0
+            ;;
+        *) echo "unknown argument: $1" >&2; exit 2 ;;
+    esac
+done
+
+[ "$(id -u)" -eq 0 ] || { echo 'must run as root' >&2; exit 1; }
+
+# External printf exits and flushes. The bash builtin blocks on a pipe,
+# so the gauge would sit still until the copy finished.
+progress() {
+    if [ -x /usr/bin/printf ]; then
+        /usr/bin/printf 'P\t%s\t%s\n' "$1" "$2"
+    elif [ -x /bin/printf ]; then
+        /bin/printf 'P\t%s\t%s\n' "$1" "$2"
+    else
+        builtin printf 'P\t%s\t%s\n' "$1" "$2"
+    fi
+}
+step() { printf '==> %s\n' "$*" >&2; }
+
+partition_whole_disk() {
+    local disk=$1
+    command -v sfdisk >/dev/null 2>&1 || { echo 'sfdisk is required for whole-disk install' >&2; exit 1; }
+    progress 3 "Partitioning $disk"
+    step "wiping and partitioning $disk (GPT, whole disk)"
+    # 1MiB BIOS boot partition is required for Limine on GPT.
+    sfdisk --wipe always --wipe-partitions always "$disk" >&2 <<'EOF'
+label: gpt
+,1MiB,21686148-6449-6E6F-744E-656564454649
+,512MiB,C12A7328-F81F-11D2-BA4B-00A0C93EC93B
+,,0FC63DAF-8483-4772-8E79-3D69D8477DE4
+EOF
+    if command -v partprobe >/dev/null 2>&1; then
+        partprobe "$disk" || true
+    fi
+    if command -v udevadm >/dev/null 2>&1; then
+        udevadm settle || true
+    fi
+    local n efi root
+    for n in 1 2 3 4 5 6 7 8 9 10; do
+        case "$disk" in
+            *loop*|*nvme*|*mmcblk*|*nbd*)
+                efi="${disk}p2"
+                root="${disk}p3"
+                ;;
+            *)
+                efi="${disk}2"
+                root="${disk}3"
+                ;;
+        esac
+        [ -b "$efi" ] && [ -b "$root" ] && break
+        sleep 0.3
+    done
+    [ -b "$efi" ] && [ -b "$root" ] || { echo "partitions did not appear on $disk" >&2; exit 1; }
+    EFI=$efi
+    ROOT=$root
+    step "EFI=$EFI  root=$ROOT"
+    progress 6 "EFI=$EFI  root=$ROOT"
+}
+
+if [ "$WHOLE_DISK" -eq 1 ]; then
+    [ -b "$DISK" ] || { echo "disk must be a block device: $DISK" >&2; exit 1; }
+    partition_whole_disk "$DISK"
+fi
+
+[ -b "$EFI" ] && [ -b "$ROOT" ] || { echo 'EFI and root must be block devices' >&2; exit 1; }
+case "$EFI" in /dev/*) ;; *) echo 'EFI must be under /dev' >&2; exit 1 ;; esac
+case "$ROOT" in /dev/*) ;; *) echo 'root must be under /dev' >&2; exit 1 ;; esac
+if [ -n "$DISK" ]; then
+    case "$DISK" in /dev/*) ;; *) echo 'disk must be under /dev' >&2; exit 1 ;; esac
+fi
+
+LIVE_ROOT=${OKRAINSTALL_LIVE_ROOT:-/run/live/rootfs}
+[ -d "$LIVE_ROOT" ] || LIVE_ROOT=/run/media/rootfs
+[ -d "$LIVE_ROOT" ] || { echo 'live rootfs is not available' >&2; exit 1; }
+LIVE_MEDIA=${OKRAINSTALL_LIVE_MEDIA:-/run/live/media}
+
+# Where the installer payload lives on the Live system.
+SRC_INSTALL=
+if [ -d /usr/lib/okrainstall ]; then
+    SRC_INSTALL=/usr
+elif [ -n "${OKRAINSTALL_PAYLOAD:-}" ]; then
+    SRC_INSTALL=$OKRAINSTALL_PAYLOAD
+else
+    HERE=$(cd "$(dirname "$0")/.." && pwd)
+    SRC_INSTALL=$HERE
+fi
+
+WORK=$(mktemp -d /tmp/okrainstall-s1.XXXXXX)
+cleanup() {
+    umount -R "$WORK/target" 2>/dev/null || true
+    rm -rf "$WORK"
+}
+trap cleanup EXIT
+mkdir -p "$WORK/target"
+
+# --- format -------------------------------------------------------------------
+if [ "$FORMAT_ROOT" -eq 1 ]; then
+    progress 8 'Formatting root (ext4)'
+    step 'formatting root (ext4)'
+    mkfs.ext4 -F -L OKRALINUX "$ROOT" >&2
+fi
+efi_type=$(blkid -s TYPE -o value "$EFI" 2>/dev/null || true)
+case "$efi_type" in
+    [Vv][Ff][Aa][Tt]|[Ff][Aa][Tt]|[Mm][Ss][Dd][Oo][Ss]) ;;
+    *)
+        progress 12 'Formatting EFI (FAT32)'
+        step 'formatting EFI (FAT32)'
+        mkfs.vfat -F32 -n EFI "$EFI" >&2
+        ;;
+esac
+
+progress 14 'Mounting target'
+step 'mounting target'
+mount "$ROOT" "$WORK/target"
+
+# --- copy Base-OS -------------------------------------------------------------
+# rsync --info=progress2 reprints one line with CR. Map that percent onto 15..82.
+progress 15 'Copying Base OS'
+step 'copying Base-OS from live rootfs'
+command -v rsync >/dev/null 2>&1 || { echo 'rsync is required' >&2; exit 1; }
+# Do not wrap rsync with stdbuf. stdbuf sets LD_PRELOAD, and these tools
+# are started by a private dynamic linker that cannot load that library.
+rsync -aH --numeric-ids --info=progress2 --no-inc-recursive --delete \
+    --exclude=/dev/* \
+    --exclude=/proc/* \
+    --exclude=/sys/* \
+    --exclude=/run/* \
+    --exclude=/tmp/* \
+    --exclude=/mnt/* \
+    --exclude=/media/* \
+    --exclude=/boot/efi \
+    --exclude=/var/lib/okrainstall \
+    "$LIVE_ROOT/" "$WORK/target/" 2>&1 | while IFS= read -r -d $'\r' chunk || [ -n "$chunk" ]; do
+    if [[ $chunk =~ ([0-9]+)% ]]; then
+        pct=${BASH_REMATCH[1]}
+        overall=$((15 + pct * 67 / 100))
+        if [ "$overall" != "${last:--1}" ]; then
+            progress "$overall" "Copying Base OS  ${pct}%"
+            last=$overall
+        fi
+    else
+        printf '%s\n' "$chunk" >&2
+    fi
+done
+
+# The squashfs has no /dev, /proc, /sys, /run, or /tmp. Those exist only as
+# mounts on the running live system, so rsync never creates them. The kernel
+# then fails devtmpfs with ENOENT (-2) because the /dev directory is missing.
+mkdir -p \
+    "$WORK/target/dev" \
+    "$WORK/target/proc" \
+    "$WORK/target/sys" \
+    "$WORK/target/run" \
+    "$WORK/target/tmp" \
+    "$WORK/target/mnt" \
+    "$WORK/target/media"
+chmod 1777 "$WORK/target/tmp"
+
+# systemd's service PATH does not include /sbin. ldconfig lives only there.
+if [ -x "$WORK/target/sbin/ldconfig" ] && [ ! -e "$WORK/target/usr/sbin/ldconfig" ]; then
+    mkdir -p "$WORK/target/usr/sbin"
+    ln -sfn ../../sbin/ldconfig "$WORK/target/usr/sbin/ldconfig"
+fi
+# The squashfs group file has no systemd-journal. journald then fails
+# to chown its socket. Live init writes this group only onto the overlay.
+# The Base OS has no grep, so match the line in the shell.
+if [ -f "$WORK/target/etc/group" ]; then
+    journal_present=0
+    while IFS= read -r line || [ -n "$line" ]; do
+        case "$line" in
+            systemd-journal:*) journal_present=1 ;;
+        esac
+    done <"$WORK/target/etc/group"
+    if [ "$journal_present" -eq 0 ]; then
+        printf 'systemd-journal:x:190:\n' >>"$WORK/target/etc/group"
+    fi
+fi
+# No kmod in the Base OS. Leave the unit masked instead of failing EXEC.
+mkdir -p "$WORK/target/etc/systemd/system"
+if [ ! -x "$WORK/target/sbin/modprobe" ] && [ ! -x "$WORK/target/usr/sbin/modprobe" ]; then
+    ln -sfn /dev/null "$WORK/target/etc/systemd/system/modprobe@.service"
+fi
+# .mount units need libmount, which this systemd was built without.
+# okra-init mounts the in-kernel filesystems. vfat and fuse are modules.
+for unit in \
+    dev-hugepages.mount \
+    dev-mqueue.mount \
+    proc-sys-fs-binfmt_misc.automount \
+    sys-fs-fuse-connections.mount \
+    sys-kernel-config.mount \
+    sys-kernel-debug.mount \
+    sys-kernel-tracing.mount
+do
+    ln -sfn /dev/null "$WORK/target/etc/systemd/system/$unit"
+done
+
+# The Okra kernel is built without vfat. Mount when the kernel can; otherwise
+# write the EFI tree with mtools (mcopy -i), which does not need a mount.
+mkdir -p "$WORK/target/boot/efi"
+EFI_MOUNTED=0
+if mount -t vfat "$EFI" "$WORK/target/boot/efi" 2>/dev/null; then
+    EFI_MOUNTED=1
+else
+    command -v mcopy >/dev/null 2>&1 || { echo 'cannot mount vfat and mcopy is missing' >&2; exit 1; }
+    step 'kernel has no vfat; writing the EFI partition with mtools'
+fi
+
+efi_mkdirs() {
+    if [ "$EFI_MOUNTED" -eq 1 ]; then
+        mkdir -p "$WORK/target/boot/efi/EFI/BOOT"
+        return
+    fi
+    export MTOOLS_SKIP_CHECK=1
+    mmd -i "$EFI" ::/EFI >/dev/null 2>&1 || true
+    mmd -i "$EFI" ::/EFI/BOOT >/dev/null 2>&1 || true
+}
+
+efi_put() {
+    local src=$1 name=$2
+    if [ "$EFI_MOUNTED" -eq 1 ]; then
+        cp "$src" "$WORK/target/boot/efi/EFI/BOOT/$name"
+        return
+    fi
+    mcopy -i "$EFI" -o "$src" "::/EFI/BOOT/$name"
+}
+
+# --- plant OKRAINSTALL --------------------------------------------------------
+progress 84 'Installing OKRAINSTALL'
+step 'planting OKRAINSTALL and phase marker (=2)'
+mkdir -p \
+    "$WORK/target/usr/bin" \
+    "$WORK/target/usr/libexec" \
+    "$WORK/target/usr/lib/okrainstall" \
+    "$WORK/target/usr/lib/okrainstall/hooks/stage2.d" \
+    "$WORK/target/usr/lib/okrainstall/hooks/stage3.d" \
+    "$WORK/target/usr/lib/systemd/system" \
+    "$WORK/target/var/lib/okrainstall" \
+    "$WORK/target/etc/systemd/system/multi-user.target.wants" \
+    "$WORK/target/etc/systemd/system/getty.target.wants"
+
+# The initramfs overlays the current installer onto the running system.
+# /run/live/rootfs is the squashfs and can be older, so prefer /usr.
+if [ -x /usr/bin/okrainstall ] && [ -d /usr/lib/okrainstall ]; then
+    PAYLOAD_ROOT=/
+elif [ -x "$LIVE_ROOT/usr/bin/okrainstall" ]; then
+    PAYLOAD_ROOT=$LIVE_ROOT
+else
+    PAYLOAD_ROOT=
+fi
+if [ -n "$PAYLOAD_ROOT" ]; then
+    cp -a "$PAYLOAD_ROOT/usr/bin/okrainstall" "$WORK/target/usr/bin/okrainstall"
+    cp -a "$PAYLOAD_ROOT/usr/lib/okrainstall/." "$WORK/target/usr/lib/okrainstall/"
+    if [ -x "$PAYLOAD_ROOT/usr/libexec/okrainstall-stage1" ]; then
+        cp -a "$PAYLOAD_ROOT/usr/libexec/okrainstall-stage1" "$WORK/target/usr/libexec/"
+    fi
+    for unit in okrainstall-live.service okrainstall-continue.service; do
+        if [ -f "$PAYLOAD_ROOT/usr/lib/systemd/system/$unit" ]; then
+            cp -a "$PAYLOAD_ROOT/usr/lib/systemd/system/$unit" \
+                "$WORK/target/usr/lib/systemd/system/$unit"
+        fi
+    done
+else
+    # Dev fallback: copy from source tree layout (OKRAINSTALL/).
+    install -Dm755 "$SRC_INSTALL/bin/okrainstall" "$WORK/target/usr/bin/okrainstall"
+    install -Dm755 "$SRC_INSTALL/libexec/okrainstall-stage1" \
+        "$WORK/target/usr/libexec/okrainstall-stage1"
+    install -Dm644 "$SRC_INSTALL/lib/"*.sh "$WORK/target/usr/lib/okrainstall/"
+    if [ -f "$SRC_INSTALL/stage2-packages.list" ]; then
+        install -Dm644 "$SRC_INSTALL/stage2-packages.list" \
+            "$WORK/target/usr/lib/okrainstall/stage2-packages.list"
+    fi
+    install -Dm644 "$SRC_INSTALL/systemd/okrainstall-live.service" \
+        "$WORK/target/usr/lib/systemd/system/okrainstall-live.service"
+    install -Dm644 "$SRC_INSTALL/systemd/okrainstall-continue.service" \
+        "$WORK/target/usr/lib/systemd/system/okrainstall-continue.service"
+fi
+
+# Ensure continue unit exists even if live payload used an older layout.
+if [ ! -f "$WORK/target/usr/lib/systemd/system/okrainstall-continue.service" ]; then
+    cat >"$WORK/target/usr/lib/systemd/system/okrainstall-continue.service" <<'EOF'
+[Unit]
+Description=OKRAINSTALL continue (stages 2/3 on installed system)
+After=local-fs.target
+ConditionPathExists=/var/lib/okrainstall/phase
+Conflicts=getty@tty1.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/bin/okrainstall --continue
+StandardInput=tty
+StandardOutput=tty
+StandardError=tty
+TTYPath=/dev/tty1
+TTYReset=yes
+TTYVHangup=yes
+
+[Install]
+WantedBy=multi-user.target
+EOF
+fi
+
+# phase=2 → next boot runs stage 2
+printf '2\n' >"$WORK/target/var/lib/okrainstall/phase"
+cat >"$WORK/target/var/lib/okrainstall/state.env" <<EOF
+# written by okrainstall-stage1
+DISK=$DISK
+EFI=$EFI
+ROOT=$ROOT
+ROOT_UUID=
+EFI_UUID=
+STAGE1_TS=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+EOF
+
+# Enable continue; disable live installer on the target.
+rm -f "$WORK/target/etc/systemd/system/multi-user.target.wants/okrainstall-live.service"
+rm -f "$WORK/target/etc/systemd/system/multi-user.target.wants/okrainstall.service"
+ln -sfn /usr/lib/systemd/system/okrainstall-continue.service \
+    "$WORK/target/etc/systemd/system/multi-user.target.wants/okrainstall-continue.service"
+
+# tty1 owned by continue unit; getty on tty2/3 for rescue.
+rm -f "$WORK/target/etc/systemd/system/getty.target.wants/getty@tty1.service"
+ln -sfn /usr/lib/systemd/system/getty@.service \
+    "$WORK/target/etc/systemd/system/getty.target.wants/getty@tty2.service"
+ln -sfn /usr/lib/systemd/system/getty@.service \
+    "$WORK/target/etc/systemd/system/getty.target.wants/getty@tty3.service"
+
+# Drop Kanina auto-start if copied from live.
+rm -f "$WORK/target/etc/systemd/system/multi-user.target.wants/kanina-live.service" \
+      "$WORK/target/etc/systemd/system/multi-user.target.wants/kanina-tui.service"
+
+# --- fstab --------------------------------------------------------------------
+progress 90 'Writing fstab'
+step 'writing fstab'
+ROOT_UUID=$(blkid -s UUID -o value "$ROOT")
+EFI_UUID=$(blkid -s UUID -o value "$EFI")
+[ -n "$ROOT_UUID" ] && [ -n "$EFI_UUID" ] || { echo 'UUID read failed' >&2; exit 1; }
+state_file=$WORK/target/var/lib/okrainstall/state.env
+tmp_state=$(mktemp)
+while IFS= read -r line || [ -n "$line" ]; do
+    case "$line" in
+        ROOT_UUID=*) printf 'ROOT_UUID=%s\n' "$ROOT_UUID" ;;
+        EFI_UUID=*) printf 'EFI_UUID=%s\n' "$EFI_UUID" ;;
+        *) printf '%s\n' "$line" ;;
+    esac
+done <"$state_file" >"$tmp_state"
+mv "$tmp_state" "$state_file"
+
+mkdir -p "$WORK/target/etc"
+cat >"$WORK/target/etc/fstab" <<EOF
+UUID=$ROOT_UUID / ext4 defaults 0 1
+UUID=$EFI_UUID /boot/efi vfat umask=0077,nofail 0 2
+EOF
+printf 'okralinux\n' >"$WORK/target/etc/hostname"
+
+# --- bootloader ---------------------------------------------------------------
+# Installed system (stages 2 and 3, and the finished OS) boots with GRUB.
+# Limine's boot(): is the EFI volume it was loaded from, so a kernel that
+# lives on the ext4 root is invisible to it. GRUB reads that ext4 directly.
+progress 94 'Installing kernel and GRUB'
+step 'installing kernel + GRUB'
+KERNEL=${OKRAINSTALL_KERNEL:-}
+if [ -z "$KERNEL" ]; then
+    for c in "$LIVE_MEDIA/boot/vmlinuz" /run/live/media/boot/vmlinuz \
+             /run/live/boot/vmlinuz /boot/vmlinuz; do
+        [ -f "$c" ] && { KERNEL=$c; break; }
+    done
+fi
+[ -n "${KERNEL:-}" ] && [ -f "$KERNEL" ] || { echo 'kernel image not found' >&2; exit 1; }
+
+mkdir -p "$WORK/target/boot/grub2/themes"
+efi_mkdirs
+cp "$KERNEL" "$WORK/target/boot/vmlinuz"
+
+ROOT_PARTUUID=$(blkid -s PARTUUID -o value "$ROOT")
+[ -n "$ROOT_PARTUUID" ] || { echo 'failed to read root PARTUUID' >&2; exit 1; }
+
+first_existing() {
+    local c
+    for c in "$@"; do
+        [ -n "$c" ] && [ -e "$c" ] && { printf '%s\n' "$c"; return 0; }
+    done
+    return 1
+}
+
+theme_hint=${OKRAINSTALL_GRUB_THEME:-}
+if [ -n "$theme_hint" ] && [ -d "$theme_hint" ]; then
+    theme_hint=$theme_hint/theme.txt
+fi
+THEME_SRC=$(first_existing \
+    "$theme_hint" \
+    /usr/lib/okrainstall/grub-theme/theme.txt \
+    "${OKRAINSTALL_PAYLOAD:-}/grub-theme/theme.txt" \
+    "$SRC_INSTALL/grub-theme/theme.txt") || true
+# A theme is what the menu looks like, not what boots. An image without one
+# still installs; refusing here turned a missing decoration into a failed
+# install, which is the wrong trade for a file nothing depends on.
+if [ -n "$THEME_SRC" ]; then
+    THEME_SRC=$(dirname "$THEME_SRC")
+    step "GRUB theme: $THEME_SRC"
+    rm -rf "$WORK/target/boot/grub2/themes/tachibana-sherry"
+    cp -a "$THEME_SRC" "$WORK/target/boot/grub2/themes/tachibana-sherry"
+    # Sarasa.pf2's face is "Sarasa Regular 28". The theme file asks for
+    # "Sarasa 16/14", which GRUB will not match. The Base OS has no sed.
+    theme_txt=$WORK/target/boot/grub2/themes/tachibana-sherry/theme.txt
+    theme_tmp=$(mktemp)
+    while IFS= read -r line || [ -n "$line" ]; do
+        line=${line//\"Sarasa 16\"/\"Sarasa Regular 28\"}
+        line=${line//\"Sarasa 14\"/\"Sarasa Regular 28\"}
+        printf '%s\n' "$line"
+    done <"$theme_txt" >"$theme_tmp"
+    mv "$theme_tmp" "$theme_txt"
+fi
+
+GRUB_EFI=$(first_existing \
+    "${OKRAINSTALL_GRUB_EFI:-}" \
+    /usr/lib/okrainstall/grub/BOOTX64.EFI \
+    "${OKRAINSTALL_PAYLOAD:-}/grub/BOOTX64.EFI" \
+    "$SRC_INSTALL/grub/BOOTX64.EFI") || true
+[ -n "$GRUB_EFI" ] || { echo 'GRUB EFI image not found (BOOTX64.EFI)' >&2; exit 1; }
+efi_put "$GRUB_EFI" BOOTX64.EFI
+
+# systemd is built without libmount. mount_option_mangle() then returns
+# EOPNOTSUPP for "mode=0755,size=4m" while mounting /dev, and PID 1 freezes.
+# Mount the API filesystems first so systemd sees them and skips that path.
+mkdir -p "$WORK/target/sbin"
+cat >"$WORK/target/sbin/okra-init" <<'EOF'
+#!/bin/bash
+# PID 1 before systemd. Absolute paths: the kernel does not set PATH.
+# Create the mount points first. A missing /dev makes the kernel's own
+# devtmpfs mount fail with ENOENT, and mount(2) cannot create it.
+/bin/mkdir -p /dev/shm /dev/pts /dev/hugepages /dev/mqueue \
+    /proc /sys/fs/cgroup /sys/kernel/debug /sys/kernel/tracing /sys/kernel/config \
+    /run/systemd /run/lock /tmp
+/bin/mount -t proc proc /proc || true
+/bin/mount -t sysfs sysfs /sys || true
+/bin/mount -t devtmpfs -o mode=0755 devtmpfs /dev || true
+/bin/mount -t tmpfs -o mode=0755 tmpfs /run || true
+/bin/mount -t tmpfs -o mode=1777,nosuid,nodev tmpfs /dev/shm || true
+/bin/mount -t devpts -o mode=0620,ptmxmode=0666,gid=5 devpts /dev/pts || true
+/bin/mount -t cgroup2 cgroup2 /sys/fs/cgroup || true
+# systemd .mount units are unsupported without libmount. These filesystems
+# are built into the kernel, so mount them here. vfat and fuse are modules.
+/bin/mount -t hugetlbfs hugetlbfs /dev/hugepages || true
+/bin/mount -t mqueue mqueue /dev/mqueue || true
+/bin/mount -t debugfs debugfs /sys/kernel/debug || true
+/bin/mount -t tracefs tracefs /sys/kernel/tracing || true
+/bin/mount -t configfs configfs /sys/kernel/config || true
+exec /usr/lib/systemd/systemd
+EOF
+chmod 755 "$WORK/target/sbin/okra-init"
+
+# tty0 last: the kernel assigns /dev/console to the last console=.
+# nomodeset keeps the VGA text console. Without it, fbcon waits for a
+# client and the QEMU window stays black while ttyS0 still prints.
+cat >"$WORK/target/boot/grub2/grub.cfg" <<EOF
+set timeout=5
+set timeout_style=menu
+set default=0
+
+serial --unit=0 --speed=115200 --word=8 --parity=no --stop=1
+terminal_input console serial
+
+if loadfont /boot/grub2/themes/tachibana-sherry/Sarasa.pf2; then
+    set gfxmode=auto
+    terminal_output gfxterm
+    set theme=/boot/grub2/themes/tachibana-sherry/theme.txt
+    export theme
+else
+    terminal_output console
+fi
+
+menuentry 'OkraLinux' --class gnu-linux --class gnu --class os {
+    search --no-floppy --fs-uuid --set=root $ROOT_UUID
+    linux /boot/vmlinuz root=PARTUUID=$ROOT_PARTUUID rw rootwait init=/sbin/okra-init console=ttyS0,115200n8 console=tty0 nomodeset systemd.show_status=yes
+}
+EOF
+
+progress 98 'Syncing disk'
+step 'sync'
+sync
+progress 100 'Stage 1 complete'
+echo 'stage1 complete: phase=2 planted' >&2
