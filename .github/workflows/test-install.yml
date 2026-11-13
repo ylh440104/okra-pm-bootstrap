@@ -29,7 +29,7 @@ jobs:
           set -euo pipefail
           sudo apt-get update -o Acquire::Retries=5
           sudo apt-get install -y --no-install-recommends \
-            qemu-system-x86 fuse2fs coreutils
+            qemu-system-x86 ovmf fuse2fs coreutils
 
       - name: Get the ISO
         env:
@@ -211,10 +211,22 @@ jobs:
           # The kernel the installer copied is what starts here, straight from
           # the written disk: no medium, no host kernel. What boots is only what
           # stage 1 put there.
+          # The installed disk boots through the EFI binary stage 1 wrote, so
+          # this run needs firmware to hand it to. Ubuntu keeps the code and the
+          # variables in separate files; the variables one is copied so the run
+          # can write to it.
+          OVMF_CODE=/usr/share/OVMF/OVMF_CODE_4M.fd
+          OVMF_VARS=/usr/share/OVMF/OVMF_VARS_4M.fd
+          [ -f "$OVMF_CODE" ] || OVMF_CODE=/usr/share/OVMF/OVMF_CODE.fd
+          [ -f "$OVMF_VARS" ] || OVMF_VARS=/usr/share/OVMF/OVMF_VARS.fd
+          ls -l "$OVMF_CODE" "$OVMF_VARS"
+          cp "$OVMF_VARS" "$RUNNER_TEMP/ovmf-vars.fd"
+
           timeout 900 qemu-system-x86_64 \
             -m 2048 -smp 2 -accel tcg \
             -drive "file=$DISK,format=raw,if=virtio" \
-            -bios /usr/share/qemu/OVMF.fd \
+            -drive "if=pflash,format=raw,readonly=on,file=$OVMF_CODE" \
+            -drive "if=pflash,format=raw,file=$RUNNER_TEMP/ovmf-vars.fd" \
             -display none -serial stdio -no-reboot \
             > "$BOOTLOG" 2>&1 || true
 
@@ -222,6 +234,16 @@ jobs:
           grep -nE 'okrainstall|phase|Stage|FAILED|error' "$BOOTLOG" 2>/dev/null | head -30 || true
           echo
           tail -30 "$BOOTLOG" 2>/dev/null || true
+
+          # The claim this step makes is that the disk boots on its own. Say
+          # so, and fail the run when it does not, instead of printing whatever
+          # came out and reporting success either way.
+          if grep -q 'OKRAINSTALL' "$BOOTLOG" 2>/dev/null; then
+            echo "PASS: the written disk booted and reached the installer's stage 2"
+          else
+            echo "FAIL: the written disk did not reach stage 2" >&2
+            exit 1
+          fi
 
       - name: Upload the logs
         if: always()
