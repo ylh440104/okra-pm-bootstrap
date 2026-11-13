@@ -105,6 +105,10 @@ jobs:
               shell_cmd 'cat /usr/lib/systemd/system-preset/50-okra-live.preset 2>&1'
               shell_cmd 'ls -l /run/dbus/ 2>&1'
               shell_cmd 'systemctl --failed --no-pager 2>&1 | head -20'
+              shell_cmd 'ls /etc/pam.d/ 2>&1'
+              shell_cmd 'head -3 /etc/pam.d/login 2>&1'
+              shell_cmd 'ls -l /bin/login /usr/bin/passwd /usr/bin/sudo 2>&1'
+              shell_cmd 'ls -l /usr/lib/okrainstall/grub/BOOTX64.EFI /usr/bin/okrainstall 2>&1'
               shell_cmd 'echo ===END-OF-DIAGNOSIS==='
             fi
             sleep 300
