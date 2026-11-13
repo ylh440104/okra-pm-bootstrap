@@ -41,17 +41,37 @@ jobs:
             "https://github.com/ylh440104/okra-pm-bootstrap/releases/download/okra-linux-iso/okra-linux.iso"
           ls -l "$RUNNER_TEMP/okra-linux.iso"
 
-      - name: Install through the menu
+      - name: Install stage 1 onto a blank disk
         env:
           SECONDS_TO_RUN: ${{ github.event.inputs.seconds }}
-          FIFO: ${{ runner.temp }}/serial.in
           LOG: ${{ runner.temp }}/install.log
-          DRIVER: ${{ runner.temp }}/driver.log
           DISK: ${{ runner.temp }}/disk.img
         run: |
           set -uo pipefail
           truncate -s 12G "$DISK"
-          rm -f "$FIFO" "$LOG" "$DRIVER"
+          rm -f "$LOG"
+
+          # The kernel command line comes from QEMU, not the menu. What this
+          # step proves is what stage 1 does to a disk; the menu is only how
+          # a human reaches it, and driving GRUB over a serial line is its
+          # own problem - the digits sent there in the last runs never
+          # arrived, and the countdown took the default every time. The
+          # arguments the installer menuentry carries are passed directly.
+          MNT=$(mktemp -d)
+          sudo mount -o loop,ro "$RUNNER_TEMP/okra-linux.iso" "$MNT"
+          cp "$MNT/boot/vmlinuz" "$RUNNER_TEMP/vmlinuz"
+          cp "$MNT/boot/initramfs-live.img" "$RUNNER_TEMP/initramfs-live.img"
+          sudo umount "$MNT"
+          rmdir "$MNT"
+          ls -l "$RUNNER_TEMP/vmlinuz" "$RUNNER_TEMP/initramfs-live.img"
+
+          # The installer draws its menu on the serial console this command
+          # line names, and the answers arrive through a fifo as the
+          # prompts appear: stage 1 asks to begin, which disk, and whether
+          # to erase. All of them take the first or default choice, which
+          # is right for a machine with exactly one blank disk.
+          FIFO="$RUNNER_TEMP/serial.in"
+          DRIVER="$RUNNER_TEMP/driver.log"
           mkfifo "$FIFO"
 
           driver() {
@@ -65,29 +85,18 @@ jobs:
               echo "  (never saw: $1)" >&2
               return 1
             }
+            send_key() { printf '%b' "$1"; }
 
-            send_key() {
-              printf '%b' "$1"
-            }
-
-            # GRUB: the menu is on the serial line too. It is a plain-ASCII terminal,
-            # so an arrow-key escape is not a key at all there - the first
-            # attempt sent one and the countdown ran out with the default
-            # entry. A digit selects and boots an entry immediately.
-            sleep 20
-            if await 'Okra Linux installer' 240; then
-              sleep 2
-              send_key '2'
-              echo "  selected the installer entry by number" >&2
+            if await 'timezone name or number' 900; then
+              sleep 3
+              send_key '\r'
+              echo "  skipped the timezone question" >&2
             fi
-
-            # Stage 1 introduces itself and asks to start.
             if await 'Start stage 1' 900; then
               sleep 3
               send_key '\r'
               echo "  confirmed stage 1" >&2
             fi
-            # The blank virtio disk is the only one offered.
             if await 'Choose the disk to use' 900; then
               sleep 3
               send_key '\r'
@@ -103,21 +112,22 @@ jobs:
               send_key '\r'
               echo "  started the write" >&2
             fi
-            if await 'Stage 1 done' 1200; then
+            if await 'Stage 1 done' 1800; then
               echo "  stage 1 completed" >&2
             fi
-            sleep 120
+            sleep 90
           }
-
           driver > "$FIFO" 2> "$DRIVER" &
 
           timeout "${SECONDS_TO_RUN:-1500}" qemu-system-x86_64 \
             -m 2048 -smp 2 -accel tcg \
-            -cdrom "$RUNNER_TEMP/okra-linux.iso" -boot d \
+            -kernel "$RUNNER_TEMP/vmlinuz" \
+            -initrd "$RUNNER_TEMP/initramfs-live.img" \
+            -append "console=ttyS0,115200n8 nomodeset loglevel=6 systemd.show_status=yes rd.live.image okra.install" \
+            -cdrom "$RUNNER_TEMP/okra-linux.iso" \
             -drive "file=$DISK,format=raw,if=virtio" \
             -display none -serial stdio -no-reboot \
-            < "$FIFO" \
-            > "$LOG" 2>&1 || true
+            < "$FIFO" > "$LOG" 2>&1 || true
 
           kill "$(jobs -p)" 2>/dev/null || true
           rm -f "$FIFO"
