@@ -122,6 +122,13 @@ jobs:
             # run died: two programs read one tty and the wrong one got the
             # key. If the shell prompt appears the mask in the init did not
             # hold, and knowing that here beats finding it out afterwards.
+            # If the shell is up instead of the installer, ask the machine
+            # itself what the init decided and what it found.
+            if grep -q 'root@okra' "$LOG" 2>/dev/null; then
+              echo "  shell came up instead of the installer - asking it why" >&2
+              send_key 'ls -l /usr/bin/okrainstall /usr/libexec/okrainstall-stage1 2>&1; echo ---; cat /proc/cmdline; echo ---; ls /run/live/ 2>&1; echo ---; ls -l /etc/systemd/system/autologin-console.service 2>&1; echo ---; systemctl is-enabled okrainstall-live.service 2>&1; echo ---; systemctl cat okrainstall-live.service 2>&1 | head -20\r'
+              sleep 25
+            fi
             if await 'Stage 1 done' 1800; then
               echo "  stage 1 completed" >&2
             fi
