@@ -92,24 +92,30 @@ jobs:
               send_key '\r'
               echo "  skipped the timezone question" >&2
             fi
-            if await 'Start stage 1' 900; then
+            # A yes/no prompt offers No first when its default is no, so
+            # Enter alone picks No - the first run confirmed the stage and
+            # cancelled in the same keystroke. The key handler reads y as
+            # yes directly, which needs no selection at all.
+            if await 'Start stage 1?' 900; then
               sleep 3
-              send_key '\r'
+              send_key 'y'
               echo "  confirmed stage 1" >&2
             fi
+            # The blank virtio disk is the only one offered, so the first
+            # menu item is the right one and Enter takes it.
             if await 'Choose the disk to use' 900; then
               sleep 3
               send_key '\r'
               echo "  chose the only disk" >&2
             fi
-            if await 'Erase the whole disk' 900; then
+            if await 'Erase the whole disk?' 900; then
               sleep 3
-              send_key '\r'
-              echo "  took the default erase answer" >&2
+              send_key 'y'
+              echo "  agreed to erase" >&2
             fi
-            if await 'Write the Base OS' 900; then
+            if await 'Write the Base OS to this disk?' 900; then
               sleep 3
-              send_key '\r'
+              send_key 'y'
               echo "  started the write" >&2
             fi
             if await 'Stage 1 done' 1800; then
