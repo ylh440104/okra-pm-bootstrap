@@ -309,6 +309,33 @@ jobs:
                   "$GITHUB_WORKSPACE/files/firmware/regulatory.db.p7s" \
                   "$ROOTFS/lib/firmware/"
           ls -l "$ROOTFS/lib/firmware/"
+
+          # Stage 1 hands the finished disk an EFI binary, because the installed
+          # system boots through it and the live ISO's own boot sector is on the
+          # medium being removed. Standalone grub carries its own modules and its
+          # own config, so the disk needs nothing else from this build.
+          #
+          # This has to happen before mksquashfs: the live root is captured at
+          # that line, so anything written after it exists on the runner and
+          # nowhere on the medium.
+          INSTALLER="$GITHUB_WORKSPACE/installer"
+          sudo mkdir -p "$ROOTFS/usr/lib/okrainstall/grub"
+          sudo grub-mkstandalone \
+            --format=x86_64-efi \
+            --output="$ROOTFS/usr/lib/okrainstall/grub/BOOTX64.EFI" \
+            --modules="part_gpt part_msdos ext2 fat normal linux search search_fs_uuid configfile echo all_video gfxterm" \
+            "boot/grub/grub.cfg=$INSTALLER/grub/early.cfg"
+          ls -l "$ROOTFS/usr/lib/okrainstall/grub/BOOTX64.EFI"
+
+          # The installer reads a phase marker and writes it back across two
+          # reboots, so it has to exist on the installed disk as well as on the
+          # live one; install-into-rootfs.sh places both units and the marker
+          # directory the same way it would for a normal build.
+          sudo bash "$INSTALLER/install-into-rootfs.sh" "$ROOTFS"
+          echo "== what the installer left"
+          ls -l "$ROOTFS/usr/bin/okrainstall" "$ROOTFS/usr/libexec/okrainstall-stage1"
+          ls "$ROOTFS/usr/lib/okrainstall"
+
           sudo mksquashfs "$ROOTFS" "$ISO_ROOT/LiveOS/rootfs.squashfs" \
             -comp zstd -noappend -no-progress -all-root -quiet
           echo "== the live root image"
@@ -376,37 +403,6 @@ jobs:
           ( cd "$INITRAMFS_TREE" && find . -print0 | cpio --null -o -H newc 2>/dev/null | gzip -9 ) \
             > "$ISO_ROOT/boot/initramfs-live.img"
           ls -l "$ISO_ROOT/boot/" "$ISO_ROOT/LiveOS/"
-
-      - name: Put the installer on the image
-        run: |
-          set -euo pipefail
-          export PROJECT_ROOT="$GITHUB_WORKSPACE/okra-linux"
-          export ROOTFS="$RUNNER_TEMP/okra-rootfs"
-          INSTALLER="$GITHUB_WORKSPACE/installer"
-
-          # Stage 1 hands the finished disk an EFI binary, because the installed
-          # system boots through it and the live ISO's own boot sector is on the
-          # medium being removed. Standalone grub carries its own modules and its
-          # own config, so the disk needs nothing else from this build.
-          sudo mkdir -p "$ROOTFS/usr/lib/okrainstall/grub"
-          sudo grub-mkstandalone \
-            --format=x86_64-efi \
-            --output="$ROOTFS/usr/lib/okrainstall/grub/BOOTX64.EFI" \
-            --modules="part_gpt part_msdos ext2 fat normal linux search search_fs_uuid configfile echo all_video gfxterm" \
-            "boot/grub/grub.cfg=$INSTALLER/grub/early.cfg"
-          ls -l "$ROOTFS/usr/lib/okrainstall/grub/BOOTX64.EFI"
-          file "$ROOTFS/usr/lib/okrainstall/grub/BOOTX64.EFI" || true
-
-          # The installer reads a phase marker and writes it back across two
-          # reboots, so it has to exist on the installed disk as well as on the
-          # live one; install-into-rootfs.sh places both units and the marker
-          # directory the same way it would for a normal build.
-          sudo bash "$INSTALLER/install-into-rootfs.sh" "$ROOTFS"
-          echo "== what the installer left"
-          ls -l "$ROOTFS/usr/bin/okrainstall" "$ROOTFS/usr/libexec/okrainstall-stage1"
-          ls "$ROOTFS/usr/lib/okrainstall"
-          ls "$ROOTFS/usr/lib/okrainstall/grub"
-          ls -l "$ROOTFS/etc/systemd/system/multi-user.target.wants/" | sed -n '1,15p'
 
       - name: Assemble the ISO
         run: |
