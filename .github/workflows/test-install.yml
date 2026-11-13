@@ -141,7 +141,7 @@ jobs:
             -m 2048 -smp 2 -accel tcg \
             -kernel "$RUNNER_TEMP/vmlinuz" \
             -initrd "$RUNNER_TEMP/initramfs-live.img" \
-            -append "console=ttyS0,115200n8 nomodeset loglevel=6 systemd.show_status=yes rd.live.image okra.install" \
+            -append "console=ttyS0,115200n8 nomodeset loglevel=6 systemd.show_status=yes rd.live.image okra.install systemd.mask=autologin-console.service" \
             -cdrom "$RUNNER_TEMP/okra-linux.iso" \
             -drive "file=$DISK,format=raw,if=virtio" \
             -display none -serial stdio -no-reboot \
