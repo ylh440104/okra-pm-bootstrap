@@ -295,11 +295,9 @@ jobs:
           disable serial-getty@ttyS0.service
           disable console-getty.service
           disable debug-shell.service
-          disable autologin-console.service
           disable systemd-ask-password-console.path
           disable systemd-ask-password-console.service
           disable ldconfig.service
-          disable okrainstall-live.service
           ignore -.mount
           PRESET
           cat "$ROOTFS/usr/lib/systemd/system-preset/50-okra-live.preset"
@@ -414,13 +412,29 @@ jobs:
           export ISO_IMAGE="$RUNNER_TEMP/okra-linux.iso"
           mkdir -p "$ISO_ROOT/boot/grub"
           cat > "$ISO_ROOT/boot/grub/grub.cfg" <<'GRUBCFG'
-          set timeout=5
+          set timeout=10
           set default=0
           insmod all_video
           insmod gfxterm
           terminal_output gfxterm
+
+          # The installer is a choice at the menu rather than the only thing that
+          # happens. A machine that boots to a menu nobody answers ends up in the
+          # first entry, which is a shell; someone who wants to install picks it
+          # and gets okra.install on the command line, and the live init starts
+          # the installer only then.
           menuentry "Okra Linux" {
               linux /boot/vmlinuz console=tty0 console=ttyS0,115200n8 nomodeset loglevel=6 systemd.show_status=yes rd.live.image
+              initrd /boot/initramfs-live.img
+          }
+
+          menuentry "Okra Linux installer" {
+              linux /boot/vmlinuz console=tty0 console=ttyS0,115200n8 nomodeset loglevel=6 systemd.show_status=yes rd.live.image okra.install
+              initrd /boot/initramfs-live.img
+          }
+
+          menuentry "Okra Linux (serial console)" {
+              linux /boot/vmlinuz console=ttyS0,115200n8 nomodeset loglevel=6 systemd.show_status=yes rd.live.image
               initrd /boot/initramfs-live.img
           }
           GRUBCFG

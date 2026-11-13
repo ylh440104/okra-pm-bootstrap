@@ -5,6 +5,11 @@ After=systemd-user-sessions.service local-fs.target
 Before=getty@tty1.service
 ConditionPathExists=/usr/bin/okrainstall
 ConditionPathExists=/run/live/rootfs
+# Booting the medium is not the same as asking to install it. The menu entry
+# that installs puts this on the command line; every other entry boots to a
+# shell. Without this the installer started on every boot and held a console
+# nobody had asked it to use.
+ConditionKernelCommandLine=okra.install
 Conflicts=getty@tty1.service kanina-live.service kanina-tui.service okrainstall-continue.service
 [Service]
 Type=simple

@@ -77,14 +77,13 @@ assert "multi-user.target.wants/autologin-console.service" in SourceLines[LinkEn
     "autologin link destination not found"
 
 Replacement = [
-    "# Two programs want the console and only one can have it. With the installer",
-    "# present that is the installer: an unattended shell on the same tty would",
-    "# take the keystrokes meant for the menu. Without one the shell is what",
-    "# makes the image usable at all. The escape hatch, okra.noinstaller, keeps",
-    "# the shell on an image that carries the installer, which is how a boot can",
-    "# be inspected without installing anything.",
+    "# Two programs want the console and only one can have it. Installing is what",
+    "# the operator asked for by picking that menu entry, so when okra.install is",
+    "# on the command line the installer takes the console and the unattended",
+    "# shell steps aside; otherwise the shell keeps it and the image is usable",
+    "# without installing anything.",
     "if [ -x /newroot/usr/bin/okrainstall ] && \\",
-    "        ! grep -q okra.noinstaller /proc/cmdline 2>/dev/null; then",
+    "        grep -q okra.install /proc/cmdline 2>/dev/null; then",
     "    ln -sf /dev/null /newroot/etc/systemd/system/autologin-console.service",
     "else",
     SourceLines[LinkStart],
