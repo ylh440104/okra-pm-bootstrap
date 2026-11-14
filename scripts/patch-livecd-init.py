@@ -1,10 +1,19 @@
 import sys
+
 Path = sys.argv[1]
 Text = open(Path, encoding='utf-8').read()
-Old = 'if [ -f /cdrom/LiveOS/rootfs.squashfs ]; then\n            echo "LiveCD init: found rootfs on $dev"\n            break 2\n        fi'
-New = 'if [ -f /cdrom/LiveOS/rootfs.squashfs ] || [ -f /cdrom/LiveOS/rootfs.ext4 ]; then\n            echo "LiveCD init: found rootfs on $dev"\n            break 2\n        fi'
+
+Old = ('if [ -f /cdrom/LiveOS/rootfs.squashfs ]; then\n'
+       '            echo "LiveCD init: found rootfs on $dev"\n'
+       '            break 2\n'
+       '        fi')
+New = ('if [ -f /cdrom/LiveOS/rootfs.squashfs ] || [ -f /cdrom/LiveOS/rootfs.ext4 ]; then\n'
+       '            echo "LiveCD init: found rootfs on $dev"\n'
+       '            break 2\n'
+       '        fi')
 assert Old in Text, 'probe not found'
 Text = Text.replace(Old, New, 1)
+
 Old = 'mount -t squashfs -o ro /cdrom/LiveOS/rootfs.squashfs /lower || halt_init "mount squashfs failed"'
 New = ('if [ -f /cdrom/LiveOS/rootfs.squashfs ]; then\n'
        '    mount -t squashfs -o ro /cdrom/LiveOS/rootfs.squashfs /lower \\\n'
@@ -16,6 +25,7 @@ New = ('if [ -f /cdrom/LiveOS/rootfs.squashfs ]; then\n'
        'fi')
 assert Old in Text, 'squashfs mount not found'
 Text = Text.replace(Old, New, 1)
+
 Old = ('if [ ! -x /newroot/bin/bash ] && [ -x /bin/bash ]; then\n'
        '    cp /bin/bash /newroot/bin/bash')
 New = ('# line 74 earlier pointed /newroot/bin/bash at ../usr/bin/bash, which the\n'
@@ -26,21 +36,23 @@ New = ('# line 74 earlier pointed /newroot/bin/bash at ../usr/bin/bash, which th
        '    cp /bin/bash /newroot/bin/bash')
 assert Old in Text, 'bash copy not found'
 Text = Text.replace(Old, New, 1)
+
 Old = (
-	'ln -sf /dev/null /newroot/etc/systemd/system/systemd-udevd.service\n'
-	'ln -sf /dev/null /newroot/etc/systemd/system/systemd-udev-trigger.service\n'
-	'ln -sf /dev/null /newroot/etc/systemd/system/systemd-udev-settle.service\n'
-	'ln -sf /dev/null /newroot/etc/systemd/system/systemd-hwdb-update.service\n'
-	'ln -sf /dev/null /newroot/etc/systemd/system/kmod-static-nodes.service\n'
-	'ln -sf /dev/null /newroot/etc/systemd/system/systemd-modules-load.service\n'
-	'ln -sf /dev/null /newroot/etc/systemd/system/modprobe@fuse.service\n')
+    'ln -sf /dev/null /newroot/etc/systemd/system/systemd-udevd.service\n'
+    'ln -sf /dev/null /newroot/etc/systemd/system/systemd-udev-trigger.service\n'
+    'ln -sf /dev/null /newroot/etc/systemd/system/systemd-udev-settle.service\n'
+    'ln -sf /dev/null /newroot/etc/systemd/system/systemd-hwdb-update.service\n'
+    'ln -sf /dev/null /newroot/etc/systemd/system/kmod-static-nodes.service\n'
+    'ln -sf /dev/null /newroot/etc/systemd/system/systemd-modules-load.service\n'
+    'ln -sf /dev/null /newroot/etc/systemd/system/modprobe@fuse.service\n')
 New = (
-	'# udevd and the units that populate /dev stay unmasked. Without them there\n'
-	'# are no device nodes and nothing else on the image works. The drop-in\n'
-	'# written further down lifts the namespace restrictions that made a\n'
-	'# masked udev seem necessary.\n')
+    '# udevd and the units that populate /dev stay unmasked. Without them there\n'
+    '# are no device nodes and nothing else on the image works. The drop-in\n'
+    '# written further down lifts the namespace restrictions that made a\n'
+    '# masked udev seem necessary.\n')
 assert Old in Text, 'mask block not found'
 Text = Text.replace(Old, New, 1)
+
 Old = ('rm -f /newroot/etc/systemd/system/sysinit.target.wants/debug-shell.service \\\n'
        '    /newroot/etc/systemd/system/sysinit.target.wants/systemd-udevd.service \\\n'
        '    /newroot/etc/systemd/system/sysinit.target.wants/systemd-udev-trigger.service \\\n'
@@ -56,15 +68,11 @@ New = ('rm -f /newroot/etc/systemd/system/sysinit.target.wants/debug-shell.servi
 assert Old in Text, 'rm block not found'
 Text = Text.replace(Old, New, 1)
 
-Marker = """    /newroot/etc/systemd/system/getty.target.wants/getty@tty1.service
-"""
-Addition = """ln -sf /dev/null /newroot/etc/systemd/system/getty@tty1.service
-"""
+Marker = "    /newroot/etc/systemd/system/getty.target.wants/getty@tty1.service\n"
+Addition = "ln -sf /dev/null /newroot/etc/systemd/system/getty@tty1.service\n"
 assert Marker in Text, 'getty wants tail not found'
 Text = Text.replace(Marker, Marker + Addition, 1)
 
-# The link is two source lines: the command, then its indented destination.
-# Find them by shape instead of spelling the backslash into a literal.
 SourceLines = Text.split("\n")
 LinkStart = None
 for Index, Line in enumerate(SourceLines):
@@ -81,18 +89,23 @@ Replacement = [
     "# what the operator asked for, so when okra.install is on the command line",
     "# the installer takes the console and the shell steps aside.",
     "#",
-    "# grep is not in the initramfs. Asking a tool that is not there for a word",
-    "# exits 127, which reads as false, and every boot took the shell branch",
-    "# because of it. The command line is split with the shell itself instead.",
+    "# Two things this branch must not do. It must not call grep, which is not",
+    "# in the initramfs, and it must not read /proc/cmdline, which line 50 has",
+    "# already moved to /newroot/proc by the time this runs. Both mistakes read",
+    "# as false and sent every boot down the shell branch.",
     "InstallerRequested=0",
     "for Word in $(cat /newroot/proc/cmdline); do",
     "    set -- $Word; [ $1 = okra.install ] && InstallerRequested=1",
     "done",
-    "echo \"LiveCD init: InstallerRequested=$InstallerRequested\"",
-    "echo \"LiveCD init: cmdline=$(cat /newroot/proc/cmdline)\"",
+    'echo "LiveCD init: InstallerRequested=$InstallerRequested"',
+    'echo "LiveCD init: cmdline=$(cat /newroot/proc/cmdline)"',
     "if [ -x /newroot/usr/bin/okrainstall ]; then Exe=yes; else Exe=no; fi",
-    "echo \"LiveCD init: installer exits=$Exe flag=$InstallerRequested\" > /dev/kmsg",
-    "if [ -f /newroot/usr/bin/okrainstall -a $InstallerRequested -eq 1 ]; then",
+    "echo \"LiveCD init: installer exits=$Exe\" > /dev/kmsg",
+    "# The flag alone decides. Asking whether the binary answers as present or",
+    "# executable at this instant on a fresh overlay was not reliable: two runs",
+    "# of the same logic disagreed and the log did not say which way it went.",
+    "# A missing installer is its own failure, reported by the unit that wanted it.",
+    "if [ $InstallerRequested -eq 1 ]; then",
     "    rm -f /newroot/etc/systemd/system/multi-user.target.wants/autologin-console.service",
     "    rm -f /newroot/etc/systemd/system/autologin-console.service",
     "    ln -sf /dev/null /newroot/etc/systemd/system/autologin-console.service",
@@ -100,8 +113,8 @@ Replacement = [
     "    ln -sfn /usr/lib/systemd/system/okrainstall-live.service \\",
     "        /newroot/etc/systemd/system/multi-user.target.wants/okrainstall-live.service",
     "else",
-        SourceLines[LinkStart],
-        SourceLines[LinkEnd],
+    SourceLines[LinkStart],
+    SourceLines[LinkEnd],
     "fi",
 ]
 SourceLines[LinkStart:LinkEnd + 1] = Replacement
