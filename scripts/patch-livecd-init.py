@@ -88,6 +88,8 @@ Replacement = [
     "for Word in $(cat /proc/cmdline); do",
     "    set -- $Word; [ $1 = okra.install ] && InstallerRequested=1",
     "done",
+    "echo \"LiveCD init: InstallerRequested=$InstallerRequested\"",
+    "echo \"LiveCD init: cmdline=$(cat /proc/cmdline)\"",
     "if [ -x /newroot/usr/bin/okrainstall -a $InstallerRequested -eq 1 ]; then",
     "    rm -f /newroot/etc/systemd/system/multi-user.target.wants/autologin-console.service",
     "    rm -f /newroot/etc/systemd/system/autologin-console.service",

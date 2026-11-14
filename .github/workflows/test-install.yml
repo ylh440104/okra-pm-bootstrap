@@ -129,6 +129,14 @@ jobs:
               send_key 'ls -l /usr/bin/okrainstall /usr/libexec/okrainstall-stage1 2>&1; echo ---; cat /proc/cmdline; echo ---; ls /run/live/ 2>&1; echo ---; ls -l /etc/systemd/system/autologin-console.service 2>&1; echo ---; systemctl is-enabled okrainstall-live.service 2>&1; echo ---; systemctl cat okrainstall-live.service 2>&1 | head -20\r'
               sleep 25
             fi
+            # The shell that came up instead of the installer can answer for
+            # itself: what it has, what the command line said, and what systemd
+            # thinks of the installer unit.
+            sleep 30
+            send_key 'ls -l /usr/bin/okrainstall; echo RC=$?; cat /proc/cmdline; echo; ls -l /etc/systemd/system/multi-user.target.wants/ 2>&1 | head -12\r'
+            echo "  asked the shell for the installer and the command line" >&2
+            sleep 25
+
             if await 'Stage 1 done' 1800; then
               echo "  stage 1 completed" >&2
             fi
