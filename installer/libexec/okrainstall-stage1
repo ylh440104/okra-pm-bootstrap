@@ -193,6 +193,26 @@ if [ -x "$WORK/target/sbin/ldconfig" ] && [ ! -e "$WORK/target/usr/sbin/ldconfig
     mkdir -p "$WORK/target/usr/sbin"
     ln -sfn ../../sbin/ldconfig "$WORK/target/usr/sbin/ldconfig"
 fi
+# systemd runs mount and umount to bring up tmp.mount and to remount the root
+# read-write. If neither path carries a working binary the first boot stops at
+# network-pre.target with 203/EXEC, and nothing on the console says why. The
+# copy is faithful; whatever the live tree has, the target now has. What is
+# added here is a repair for the case where the live tree relied on a link
+# into a directory that does not exist on the target.
+for tool in mount umount; do
+    if [ ! -x "$WORK/target/bin/$tool" ] && [ ! -x "$WORK/target/usr/bin/$tool" ]; then
+        for source in "$LIVE_ROOT/bin/$tool" "$LIVE_ROOT/usr/bin/$tool" \
+                      "/bin/$tool" "/usr/bin/$tool"; do
+            if [ -x "$source" ]; then
+                mkdir -p "$WORK/target/usr/bin"
+                cp -a "$source" "$WORK/target/usr/bin/$tool"
+                ln -sfn ../usr/bin/$tool "$WORK/target/bin/$tool"
+                step "recovered $tool from $source"
+                break
+            fi
+        done
+    fi
+done
 # The squashfs group file has no systemd-journal. journald then fails
 # to chown its socket. Live init writes this group only onto the overlay.
 # The Base OS has no grep, so match the line in the shell.
