@@ -207,6 +207,10 @@ jobs:
             printf '%s: ' "$b"
             ls -ld "$MNT/$b" 2>&1 | sed 's/^/  /' || true
           done
+          echo "== usr/lib64 contents"
+          ls -l "$MNT/usr/lib64/" 2>&1 | head -8
+          echo "== where is an interpreter anywhere in usr"
+          find "$MNT/usr" -name 'ld-linux*' 2>/dev/null | head -5
           echo "== does mount resolve inside the disk"
           strings "$MNT/bin/mount" 2>/dev/null | grep -m1 'ld-linux' || echo "no interpreter string"
           test -x "$MNT/lib64/ld-linux-x86-64.so.2" && echo "interpreter present at lib64" || echo "interpreter NOT at lib64"

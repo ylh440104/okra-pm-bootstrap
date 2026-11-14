@@ -211,7 +211,29 @@ done
 if [ -x "$WORK/target/lib64/ld-linux-x86-64.so.2" ] || [ -x "$WORK/target/lib/ld-linux-x86-64.so.2" ]; then
     step 'the interpreter resolves on the target'
 else
-    echo 'no ELF interpreter on the target; nothing will execute there' >&2
+    # The links are back but the file they resolve to is not on the target.
+    # Every binary in the tree names this one file as its interpreter, so a
+    # target without it can execute nothing at all: systemd starts mount to
+    # bring up tmp.mount, gets ENOENT from execve, and reports 203/EXEC.
+    # Take it from the live tree, or from the running system, wherever it is.
+    for candidate in "$LIVE_ROOT/usr/lib64/ld-linux-x86-64.so.2" \
+                     "$LIVE_ROOT/lib64/ld-linux-x86-64.so.2" \
+                     "$LIVE_ROOT/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2" \
+                     "/usr/lib64/ld-linux-x86-64.so.2" \
+                     "/lib64/ld-linux-x86-64.so.2"; do
+        if [ -e "$candidate" ]; then
+            mkdir -p "$WORK/target/usr/lib64" "$WORK/target/usr/lib/x86_64-linux-gnu"
+            cp -aL "$candidate" "$WORK/target/usr/lib64/ld-linux-x86-64.so.2"
+            cp -aL "$candidate" "$WORK/target/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2"
+            step "took the interpreter from $candidate"
+            break
+        fi
+    done
+    if [ -x "$WORK/target/usr/lib64/ld-linux-x86-64.so.2" ]; then
+        step 'the interpreter resolves on the target now'
+    else
+        echo 'no ELF interpreter anywhere; nothing will execute on the target' >&2
+    fi
 fi
 # systemd runs mount and umount to bring up tmp.mount and to remount the root
 # read-write. If neither path carries a working binary the first boot stops at
