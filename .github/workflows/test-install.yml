@@ -203,10 +203,14 @@ jobs:
           test -f "$MNT/usr/lib/systemd/system/okrainstall-continue.service" && echo "continue unit present" || echo "continue unit MISSING"
           test -f "$MNT/usr/lib/systemd/system/okrainstall-live.service" && echo "live unit still there" || echo "live unit gone"
           ls -l "$MNT/etc/systemd/system/multi-user.target.wants/" 2>&1 | head -12
-          for b in bin bin/mount bin/umount usr/bin usr/bin/mount usr/bin/umount; do
+          for b in lib lib64 usr/lib lib/x86_64-linux-gnu/ld-linux-x86-64.so.2; do
             printf '%s: ' "$b"
             ls -ld "$MNT/$b" 2>&1 | sed 's/^/  /'
           done
+          echo "== does mount resolve inside the disk"
+          strings "$MNT/bin/mount" 2>/dev/null | grep -m1 'ld-linux' || echo "no interpreter string"
+          test -x "$MNT/lib64/ld-linux-x86-64.so.2" && echo "interpreter present at lib64" || echo "interpreter NOT at lib64"
+          test -x "$MNT/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2" && echo "interpreter present at lib/x86_64" || echo "interpreter NOT at lib/x86_64
           echo "== fstab"
           cat "$MNT/etc/fstab" 2>&1
               fusermount -u "$MNT" || fusermount3 -u "$MNT" || true
