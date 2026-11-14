@@ -18,7 +18,11 @@ ExecStart=/usr/bin/okrainstall --continue
 StandardInput=tty
 StandardOutput=tty
 StandardError=tty
-TTYPath=/dev/tty1
+# The same rule as the live unit: the console the kernel registered is the one
+# someone is watching. Naming tty1 here failed every boot on a machine whose
+# only terminal is the serial line - the unit could not open its terminal and
+# exited before printing anything.
+TTYPath=/dev/console
 TTYReset=yes
 TTYVHangup=yes
 TTYVTDisallocate=yes
