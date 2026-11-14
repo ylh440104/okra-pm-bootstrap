@@ -90,6 +90,8 @@ Replacement = [
     "done",
     "echo \"LiveCD init: InstallerRequested=$InstallerRequested\"",
     "echo \"LiveCD init: cmdline=$(cat /newroot/proc/cmdline)\"",
+    "if [ -x /newroot/usr/bin/okrainstall ]; then Exe=yes; else Exe=no; fi",
+    "echo \"LiveCD init: installer exits=$Exe flag=$InstallerRequested\" > /dev/kmsg",
     "if [ -x /newroot/usr/bin/okrainstall -a $InstallerRequested -eq 1 ]; then",
     "    rm -f /newroot/etc/systemd/system/multi-user.target.wants/autologin-console.service",
     "    rm -f /newroot/etc/systemd/system/autologin-console.service",
