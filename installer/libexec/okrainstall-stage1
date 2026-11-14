@@ -460,6 +460,40 @@ UUID=$ROOT_UUID / ext4 defaults 0 1
 UUID=$EFI_UUID /boot/efi vfat umask=0077,nofail 0 2
 EOF
 printf 'okralinux\n' >"$WORK/target/etc/hostname"
+# systemd mounts /dev, /dev/shm, /tmp and /sys/fs/cgroup itself at startup and
+# then reads the options back out of mountinfo to rewrite them in its own
+# form. That step needs libmount, which this systemd loads with dlopen and
+# which this rootfs does not carry. Every option it cannot rewrite is answered
+# with EOPNOTSUPP, and mount_setup() treats that as fatal: the boot ends with
+# "Freezing execution" before a single unit runs.
+#
+# The live medium never shows this because its initramfs mounted those three
+# before handing over, so systemd found them already there and left them alone.
+# An installed disk has only the root mounted when okra-init starts. Wrapping
+# okra-init so it does the same mounting closes the gap without touching
+# systemd.
+if [ -f "$WORK/target/sbin/okra-init" ] && [ ! -f "$WORK/target/sbin/okra-init.real" ]; then
+    mv "$WORK/target/sbin/okra-init" "$WORK/target/sbin/okra-init.real"
+    cat >"$WORK/target/sbin/okra-init" <<'OKRAINIT'
+#!/bin/bash
+# Mount what systemd would otherwise mount itself. Presenting these already
+# mounted keeps mount_setup() from trying to normalise their options, which
+# this systemd cannot do without libmount.
+mount -t devtmpfs dev /dev 2>/dev/null || mount -t tmpfs dev /dev 2>/dev/null || true
+mkdir -p /dev/pts /dev/shm
+mount -t devpts devpts /dev/pts 2>/dev/null || true
+mount -t tmpfs -o mode=01777 tmpfs /dev/shm 2>/dev/null || true
+mount -t tmpfs -o mode=01777,size=20%,nr_inodes=800k tmpfs /tmp 2>/dev/null || true
+mount -t proc proc /proc 2>/dev/null || true
+mount -t sysfs sys /sys 2>/dev/null || true
+mkdir -p /sys/fs/cgroup
+mount -t cgroup2 -o nsdelegate,memory_recursiveprot,memory_hugetlb_accounting cgroup2 /sys/fs/cgroup 2>/dev/null \
+    || mount -t cgroup2 cgroup2 /sys/fs/cgroup 2>/dev/null || true
+exec /sbin/okra-init.real "$@"
+OKRAINIT
+    chmod 755 "$WORK/target/sbin/okra-init"
+    step 'wrapped okra-init to mount dev, tmp and cgroup itself'
+fi
 
 # --- bootloader ---------------------------------------------------------------
 # Installed system (stages 2 and 3, and the finished OS) boots with GRUB.
