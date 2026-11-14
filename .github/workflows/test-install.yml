@@ -210,7 +210,7 @@ jobs:
           echo "== does mount resolve inside the disk"
           strings "$MNT/bin/mount" 2>/dev/null | grep -m1 'ld-linux' || echo "no interpreter string"
           test -x "$MNT/lib64/ld-linux-x86-64.so.2" && echo "interpreter present at lib64" || echo "interpreter NOT at lib64"
-          test -x "$MNT/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2" && echo "interpreter present at lib/x86_64" || echo "interpreter NOT at lib/x86_64
+          test -x "$MNT/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2" && echo "interpreter present at lib/x86_64" || echo "interpreter NOT at lib/x86_64"
           echo "== fstab"
           cat "$MNT/etc/fstab" 2>&1
               fusermount -u "$MNT" || fusermount3 -u "$MNT" || true
