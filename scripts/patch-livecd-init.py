@@ -92,7 +92,7 @@ Replacement = [
     "echo \"LiveCD init: cmdline=$(cat /newroot/proc/cmdline)\"",
     "if [ -x /newroot/usr/bin/okrainstall ]; then Exe=yes; else Exe=no; fi",
     "echo \"LiveCD init: installer exits=$Exe flag=$InstallerRequested\" > /dev/kmsg",
-    "if [ -x /newroot/usr/bin/okrainstall -a $InstallerRequested -eq 1 ]; then",
+    "if [ -f /newroot/usr/bin/okrainstall -a $InstallerRequested -eq 1 ]; then",
     "    rm -f /newroot/etc/systemd/system/multi-user.target.wants/autologin-console.service",
     "    rm -f /newroot/etc/systemd/system/autologin-console.service",
     "    ln -sf /dev/null /newroot/etc/systemd/system/autologin-console.service",
@@ -100,8 +100,8 @@ Replacement = [
     "    ln -sfn /usr/lib/systemd/system/okrainstall-live.service \\",
     "        /newroot/etc/systemd/system/multi-user.target.wants/okrainstall-live.service",
     "else",
-    SourceLines[LinkStart],
-    SourceLines[LinkEnd],
+        SourceLines[LinkStart],
+        SourceLines[LinkEnd],
     "fi",
 ]
 SourceLines[LinkStart:LinkEnd + 1] = Replacement
