@@ -200,6 +200,9 @@ jobs:
               test -f "$MNT/boot/vmlinuz" && echo "kernel present" || echo "kernel MISSING"
               test -f "$MNT/etc/fstab" && echo "fstab present" || echo "fstab MISSING"
               test -f "$MNT/usr/lib/okrainstall/grub/BOOTX64.EFI" && echo "EFI binary present" || echo "EFI binary MISSING"
+          test -f "$MNT/usr/lib/systemd/system/okrainstall-continue.service" && echo "continue unit present" || echo "continue unit MISSING"
+          test -f "$MNT/usr/lib/systemd/system/okrainstall-live.service" && echo "live unit still there" || echo "live unit gone"
+          ls -l "$MNT/etc/systemd/system/multi-user.target.wants/" 2>&1 | head -12
               fusermount -u "$MNT" || fusermount3 -u "$MNT" || true
             else
               echo "fuse2fs could not mount the root partition"
