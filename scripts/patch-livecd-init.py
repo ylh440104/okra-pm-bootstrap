@@ -82,6 +82,8 @@ Replacement = [
     "# on the command line the installer takes the console and the unattended",
     "# shell steps aside; otherwise the shell keeps it and the image is usable",
     "# without installing anything.",
+    "echo \"LiveCD init: checking installer: $(ls -l /newroot/usr/bin/okrainstall 2>&1)\"",
+    "echo \"LiveCD init: cmdline: $(cat /proc/cmdline)\"",
     "if [ -x /newroot/usr/bin/okrainstall ] && \\",
     "        grep -q okra.install /proc/cmdline 2>/dev/null; then",
     "    rm -f /newroot/etc/systemd/system/multi-user.target.wants/autologin-console.service",
