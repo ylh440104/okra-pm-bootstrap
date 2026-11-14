@@ -357,6 +357,12 @@ rm -f "$WORK/target/etc/systemd/system/multi-user.target.wants/okrainstall.servi
 rm -f "$WORK/target/usr/lib/systemd/system/okrainstall-live.service"
 ln -sfn /usr/lib/systemd/system/okrainstall-continue.service \
     "$WORK/target/etc/systemd/system/multi-user.target.wants/okrainstall-continue.service"
+# The installed system spends its first seconds rebuilding a hardware database
+# that this build already compiled. On a serial-only machine with two cores
+# that pass outlasts the boot: systemd sits in hwdb-update and never reaches
+# multi-user, so the unit that continues the install is never even asked to
+# start. The database is on the image; rebuilding it buys nothing.
+ln -sf /dev/null "$WORK/target/etc/systemd/system/systemd-hwdb-update.service"
 
 # tty1 owned by continue unit; getty on tty2/3 for rescue.
 rm -f "$WORK/target/etc/systemd/system/getty.target.wants/getty@tty1.service"
