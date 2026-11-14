@@ -193,6 +193,26 @@ if [ -x "$WORK/target/sbin/ldconfig" ] && [ ! -e "$WORK/target/usr/sbin/ldconfig
     mkdir -p "$WORK/target/usr/sbin"
     ln -sfn ../../sbin/ldconfig "$WORK/target/usr/sbin/ldconfig"
 fi
+# /lib and /lib64 are symlinks to usr/lib and usr/lib64 in this rootfs, and
+# rsync -aH leaves them behind as empty directories instead. Every ELF header
+# in the tree names /lib64/ld-linux-x86-64.so.2 as its interpreter, so once the
+# links are gone the kernel cannot start anything: mount answers ENOENT to
+# execve and systemd reports 203/EXEC, which reads like a missing program.
+# Put the links back, and drop the empty directories rsync made in their place.
+for link in lib:usr/lib lib64:usr/lib64; do
+    name=${link%%:*}
+    target=${link##*:}
+    if [ -d "$WORK/target/$target" ] && [ ! -L "$WORK/target/$name" ]; then
+        rm -rf "$WORK/target/$name"
+        ln -sfn "$target" "$WORK/target/$name"
+        step "relinked /$name to /$target"
+    fi
+done
+if [ -x "$WORK/target/lib64/ld-linux-x86-64.so.2" ] || [ -x "$WORK/target/lib/ld-linux-x86-64.so.2" ]; then
+    step 'the interpreter resolves on the target'
+else
+    echo 'no ELF interpreter on the target; nothing will execute there' >&2
+fi
 # systemd runs mount and umount to bring up tmp.mount and to remount the root
 # read-write. If neither path carries a working binary the first boot stops at
 # network-pre.target with 203/EXEC, and nothing on the console says why. The
