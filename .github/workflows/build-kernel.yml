@@ -112,9 +112,19 @@ jobs:
             -e SQUASHFS -e SQUASHFS_ZSTD -e SQUASHFS_XZ \
             -e OVERLAY_FS -e OVERLAY_FS_REDIRECT_DIR -e OVERLAY_FS_METACOPY \
             -e BPF_SYSCALL -e CGROUP_BPF \
+            -e MEMCG -e MEMCG_SWAP -e MEMCG_KMEM \
+            -e CGROUP_SCHED -e CGROUP_FREEZER -e CGROUP_DEVICE -e CGROUP_CPUACCT \
+            -e USER_NS -e PID_NS -e NET_NS -e UTS_NS -e IPC_NS \
             -d NF_CONNTRACK_IRC
           echo "== after the change"
           grep -E 'CONFIG_(SQUASHFS|OVERLAY_FS|BPF_SYSCALL|CGROUP_BPF)|NF_CONNTRACK_IRC' "$RUNNER_TEMP/kernel/.config" || true
+          # systemd reads the options the kernel used to mount the root and
+          # rewrites them in its own form. memory_recursiveprot and
+          # memory_hugetlb_accounting are memory cgroup options: without MEMCG
+          # the kernel answers them with EOPNOTSUPP, systemd prints
+          # "Failed to mangle mount options" for each one, and then it freezes.
+          # That is what stopped the installed disk from reaching multi-user.
+          grep -E '^CONFIG_(MEMCG|USER_NS|CGROUP_SCHED)=' "$RUNNER_TEMP/kernel/.config" || true
 
       - name: Build the kernel inside the system, with its own compiler
         run: |
