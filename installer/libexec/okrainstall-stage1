@@ -344,9 +344,17 @@ EFI_UUID=
 STAGE1_TS=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 EOF
 
-# Enable continue; disable live installer on the target.
+# Enable continue; remove the live installer from the target entirely.
+#
+# Removing the wants link is not enough. okrainstall-live.service declares
+# WantedBy=multi-user.target, and the first boot of the installed system runs
+# the preset pass, which enables every unit with no preset rule against it.
+# The link came back on its own and the live installer took the console from
+# the one that was supposed to continue the install. Deleting the unit file
+# leaves the link dangling, and systemd ignores a link to nothing.
 rm -f "$WORK/target/etc/systemd/system/multi-user.target.wants/okrainstall-live.service"
 rm -f "$WORK/target/etc/systemd/system/multi-user.target.wants/okrainstall.service"
+rm -f "$WORK/target/usr/lib/systemd/system/okrainstall-live.service"
 ln -sfn /usr/lib/systemd/system/okrainstall-continue.service \
     "$WORK/target/etc/systemd/system/multi-user.target.wants/okrainstall-continue.service"
 
