@@ -219,8 +219,8 @@ jobs:
           ls -ld "$MNT/sbin" "$MNT/usr/sbin" 2>&1 | sed 's/^/  /'
           echo "== where okra-init lives"
           ls -l "$MNT/sbin/okra-init" "$MNT/sbin/okra-init.real" "$MNT/usr/sbin/okra-init" 2>&1 | sed 's/^/  /' || true
-          echo "== okra-init head"
-          head -3 "$MNT/sbin/okra-init" 2>/dev/null || head -3 "$MNT/usr/sbin/okra-init" 2>/dev/null || echo none
+          echo "== okra-init full"
+          cat "$MNT/sbin/okra-init" 2>/dev/null | head -60 || echo none
           echo "== fstab"
           cat "$MNT/etc/fstab" 2>&1
               fusermount -u "$MNT" || fusermount3 -u "$MNT" || true
