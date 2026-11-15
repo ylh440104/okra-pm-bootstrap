@@ -474,7 +474,21 @@ printf 'okralinux\n' >"$WORK/target/etc/hostname"
 # systemd.
 if [ -f "$WORK/target/sbin/okra-init" ] && [ ! -f "$WORK/target/sbin/okra-init.real" ]; then
     mv "$WORK/target/sbin/okra-init" "$WORK/target/sbin/okra-init.real"
-    cat >"$WORK/target/sbin/okra-init" <<'OKRAINIT'
+elif [ -f "$WORK/target/usr/sbin/okra-init" ] && [ ! -f "$WORK/target/usr/sbin/okra-init.real" ]; then
+    mv "$WORK/target/usr/sbin/okra-init" "$WORK/target/usr/sbin/okra-init.real"
+fi
+# The kernel runs /sbin/okra-init, and on this rootfs /sbin is a link to
+# usr/sbin. Writing to the whichever path the file was found at keeps the
+# wrapper where the kernel will look for it.
+INIT_PATH=
+for candidate in sbin/okra-init usr/sbin/okra-init; do
+    if [ -f "$WORK/target/$candidate.real" ] && [ ! -f "$WORK/target/$candidate.wrapped" ]; then
+        INIT_PATH=$candidate
+        break
+    fi
+done
+if [ -n "$INIT_PATH" ]; then
+    cat >"$WORK/target/$INIT_PATH" <<'OKRAINIT'
 #!/bin/bash
 # Mount what systemd would otherwise mount itself. Presenting these already
 # mounted keeps mount_setup() from trying to normalise their options, which
@@ -491,8 +505,9 @@ mount -t cgroup2 -o nsdelegate,memory_recursiveprot,memory_hugetlb_accounting cg
     || mount -t cgroup2 cgroup2 /sys/fs/cgroup 2>/dev/null || true
 exec /sbin/okra-init.real "$@"
 OKRAINIT
-    chmod 755 "$WORK/target/sbin/okra-init"
-    step 'wrapped okra-init to mount dev, tmp and cgroup itself'
+    chmod 755 "$WORK/target/$INIT_PATH"
+    touch "$WORK/target/$INIT_PATH.wrapped"
+    step "wrapped $INIT_PATH to mount dev, tmp and cgroup itself"
 fi
 
 # --- bootloader ---------------------------------------------------------------

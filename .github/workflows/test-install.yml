@@ -215,6 +215,12 @@ jobs:
           strings "$MNT/bin/mount" 2>/dev/null | grep -m1 'ld-linux' || echo "no interpreter string"
           test -x "$MNT/lib64/ld-linux-x86-64.so.2" && echo "interpreter present at lib64" || echo "interpreter NOT at lib64"
           test -x "$MNT/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2" && echo "interpreter present at lib/x86_64" || echo "interpreter NOT at lib/x86_64"
+          echo "== sbin layout"
+          ls -ld "$MNT/sbin" "$MNT/usr/sbin" 2>&1 | sed 's/^/  /'
+          echo "== where okra-init lives"
+          ls -l "$MNT/sbin/okra-init" "$MNT/sbin/okra-init.real" "$MNT/usr/sbin/okra-init" 2>&1 | sed 's/^/  /' || true
+          echo "== okra-init head"
+          head -3 "$MNT/sbin/okra-init" 2>/dev/null || head -3 "$MNT/usr/sbin/okra-init" 2>/dev/null || echo none
           echo "== fstab"
           cat "$MNT/etc/fstab" 2>&1
               fusermount -u "$MNT" || fusermount3 -u "$MNT" || true
