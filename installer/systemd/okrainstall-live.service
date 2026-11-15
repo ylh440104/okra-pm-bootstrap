@@ -28,5 +28,8 @@ TTYReset=yes
 TTYVHangup=yes
 TTYVTDisallocate=yes
 Restart=no
-[Install]
-WantedBy=multi-user.target
+# No [Install] section on purpose. On the live medium the initramfs creates
+# the wants link when okra.install is on the kernel command line, which is the
+# only condition under which this unit should start. An [Install] section
+# would hand that decision to the preset pass instead, which enables anything
+# without a rule against it and has no way to read the command line.

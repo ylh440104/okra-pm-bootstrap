@@ -27,5 +27,10 @@ TTYReset=yes
 TTYVHangup=yes
 TTYVTDisallocate=yes
 
-[Install]
-WantedBy=multi-user.target
+# No [Install] section on purpose. A unit that declares WantedBy=multi-user
+# gets enabled by the preset pass, and this one must not be: it conflicts with
+# the live installer, so on the live medium both would be pulled in, cancel
+# each other, and the boot would end with neither running - sometimes, which
+# is the worst way for it to happen. stage 1 plants the wants link on the
+# installed disk itself, and systemd starts a linked unit whether or not it
+# carries an [Install] section.
