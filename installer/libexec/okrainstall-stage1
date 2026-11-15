@@ -460,54 +460,51 @@ UUID=$ROOT_UUID / ext4 defaults 0 1
 UUID=$EFI_UUID /boot/efi vfat umask=0077,nofail 0 2
 EOF
 printf 'okralinux\n' >"$WORK/target/etc/hostname"
-# systemd mounts /dev, /dev/shm, /tmp and /sys/fs/cgroup itself at startup and
-# then reads the options back out of mountinfo to rewrite them in its own
-# form. That step needs libmount, which this systemd loads with dlopen and
-# which this rootfs does not carry. Every option it cannot rewrite is answered
-# with EOPNOTSUPP, and mount_setup() treats that as fatal: the boot ends with
+# systemd's mount_setup() reads the options each filesystem was mounted with
+# and rewrites them in its own form. It needs libmount for that, and this
+# rootfs has none: the dlopen fails, every option it cannot rewrite is answered
+# with EOPNOTSUPP, and mount_setup() treats that as fatal. The boot ends with
 # "Freezing execution" before a single unit runs.
 #
-# The live medium never shows this because its initramfs mounted those three
-# before handing over, so systemd found them already there and left them alone.
-# An installed disk has only the root mounted when okra-init starts. Wrapping
-# okra-init so it does the same mounting closes the gap without touching
-# systemd.
-if [ -f "$WORK/target/sbin/okra-init" ] && [ ! -f "$WORK/target/sbin/okra-init.real" ]; then
-    mv "$WORK/target/sbin/okra-init" "$WORK/target/sbin/okra-init.real"
-elif [ -f "$WORK/target/usr/sbin/okra-init" ] && [ ! -f "$WORK/target/usr/sbin/okra-init.real" ]; then
-    mv "$WORK/target/usr/sbin/okra-init" "$WORK/target/usr/sbin/okra-init.real"
-fi
-# The kernel runs /sbin/okra-init, and on this rootfs /sbin is a link to
-# usr/sbin. Writing to the whichever path the file was found at keeps the
-# wrapper where the kernel will look for it.
-INIT_PATH=
-for candidate in sbin/okra-init usr/sbin/okra-init; do
-    if [ -f "$WORK/target/$candidate.real" ] && [ ! -f "$WORK/target/$candidate.wrapped" ]; then
-        INIT_PATH=$candidate
-        break
+# The live medium never reaches this because its initramfs mounted these the
+# same way systemd would. An installed disk is mounted by okra-init, whose
+# choices differ in three places that matter: /tmp is created but never
+# mounted, /dev/shm uses mode=1777 rather than 01777, and cgroup2 is mounted
+# without the three options systemd passes. Those are exactly the three lines
+# it complains about.
+#
+# Edit okra-init rather than wrap it: it is a shell script, and the fix belongs
+# at the point where it mounts things.
+if [ -f "$WORK/target/sbin/okra-init" ] && [ ! -f "$WORK/target/sbin/okra-init.orig" ]; then
+    cp -a "$WORK/target/sbin/okra-init" "$WORK/target/sbin/okra-init.orig"
+    python3 - "$WORK/target/sbin/okra-init" <<'PATCH_OKRAINIT' || \
+        cp -a "$WORK/target/sbin/okra-init.orig" "$WORK/target/sbin/okra-init"
+import sys
+Path = sys.argv[1]
+Text = open(Path, encoding='utf-8').read()
+Old = '/bin/mount -t tmpfs -o mode=1777,nosuid,nodev tmpfs /dev/shm || true'
+New = '/bin/mount -t tmpfs -o mode=01777 tmpfs /dev/shm || true'
+assert Old in Text, 'shm line not found'
+Text = Text.replace(Old, New, 1)
+Old = '/bin/mount -t cgroup2 cgroup2 /sys/fs/cgroup || true'
+New = ('/bin/mount -t cgroup2 \\\n'
+       '    -o nsdelegate,memory_recursiveprot,memory_hugetlb_accounting \\\n'
+       '    cgroup2 /sys/fs/cgroup \\\n'
+       '    || /bin/mount -t cgroup2 cgroup2 /sys/fs/cgroup || true\n'
+       '# systemd mounts /tmp itself with these options, and then cannot rewrite\n'
+       '# them without libmount. Present it mounted the same way and it stays put.\n'
+       '/bin/mount -t tmpfs -o mode=01777,size=20%,nr_inodes=800k tmpfs /tmp \\\n'
+       '    || /bin/mount -t tmpfs -o mode=01777 tmpfs /tmp || true')
+assert Old in Text, 'cgroup line not found'
+Text = Text.replace(Old, New, 1)
+open(Path, 'w', encoding='utf-8').write(Text)
+print('okra-init patched')
+PATCH_OKRAINIT
+    if grep -q 'size=20%' "$WORK/target/sbin/okra-init" 2>/dev/null; then
+        step 'okra-init now mounts shm, tmp and cgroup as systemd would'
+    else
+        echo 'okra-init patch did not apply; left the original in place' >&2
     fi
-done
-if [ -n "$INIT_PATH" ]; then
-    cat >"$WORK/target/$INIT_PATH" <<'OKRAINIT'
-#!/bin/bash
-# Mount what systemd would otherwise mount itself. Presenting these already
-# mounted keeps mount_setup() from trying to normalise their options, which
-# this systemd cannot do without libmount.
-mount -t devtmpfs dev /dev 2>/dev/null || mount -t tmpfs dev /dev 2>/dev/null || true
-mkdir -p /dev/pts /dev/shm
-mount -t devpts devpts /dev/pts 2>/dev/null || true
-mount -t tmpfs -o mode=01777 tmpfs /dev/shm 2>/dev/null || true
-mount -t tmpfs -o mode=01777,size=20%,nr_inodes=800k tmpfs /tmp 2>/dev/null || true
-mount -t proc proc /proc 2>/dev/null || true
-mount -t sysfs sys /sys 2>/dev/null || true
-mkdir -p /sys/fs/cgroup
-mount -t cgroup2 -o nsdelegate,memory_recursiveprot,memory_hugetlb_accounting cgroup2 /sys/fs/cgroup 2>/dev/null \
-    || mount -t cgroup2 cgroup2 /sys/fs/cgroup 2>/dev/null || true
-exec /sbin/okra-init.real "$@"
-OKRAINIT
-    chmod 755 "$WORK/target/$INIT_PATH"
-    touch "$WORK/target/$INIT_PATH.wrapped"
-    step "wrapped $INIT_PATH to mount dev, tmp and cgroup itself"
 fi
 
 # --- bootloader ---------------------------------------------------------------
