@@ -395,7 +395,16 @@ jobs:
           fi
           [ -d "$MNT/home/okra" ] && report 'home directory' yes present || report 'home directory' no missing
           grep -q '^okra:' "$MNT/etc/passwd" && report 'user in passwd' yes present || report 'user in passwd' no missing
-          grep -q '^okra:' "$MNT/etc/shadow" && report 'user in shadow' yes present || report 'user in shadow' no missing
+          # shadow is mode 000 to the reader and grep is denied before it can
+          # open it. sudo cat opens it with privileges; -H says no match, an
+          # error says the file itself is gone, which is a different failure.
+          if sudo grep -q '^okra:' "$MNT/etc/shadow" 2>/dev/null; then
+            report 'user in shadow' yes present
+          elif [ -f "$MNT/etc/shadow" ]; then
+            report 'user in shadow' no 'present but unreadable'
+          else
+            report 'user in shadow' no missing
+          fi
           [ -f "$MNT/etc/localtime" ] && report 'localtime' yes set || report 'localtime' no missing
           [ -e "$MNT/usr/bin/okrainstall" ] && report 'installer binary' no 'still there' || report 'installer binary' yes removed
           [ -e "$MNT/usr/lib/systemd/system/okrainstall-continue.service" ] \
