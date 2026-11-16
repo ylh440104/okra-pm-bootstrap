@@ -435,6 +435,13 @@ ln -sfn /usr/lib/systemd/system/okrainstall-continue.service \
 # start. The database is on the image; rebuilding it buys nothing.
 ln -sf /dev/null "$WORK/target/etc/systemd/system/systemd-hwdb-update.service"
 
+# serial-getty wants the same line the installer draws on, and systemd
+# starts it regardless of who is already there: the second boot showed the
+# installer waiting for Enter while a getty sat on ttyS0 holding the
+# keyboard. The continue unit declares the conflict as well, but removing
+# the link here stops the race before it can start.
+rm -f "$WORK/target/etc/systemd/system/serial-getty.target.wants/serial-getty@ttyS0.service" \
+      "$WORK/target/etc/systemd/system/getty.target.wants/serial-getty@ttyS0.service"
 # tty1 owned by continue unit; getty on tty2/3 for rescue.
 rm -f "$WORK/target/etc/systemd/system/getty.target.wants/getty@tty1.service"
 ln -sfn /usr/lib/systemd/system/getty@.service \

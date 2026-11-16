@@ -8,7 +8,7 @@ After=local-fs.target
 Before=getty@tty1.service
 ConditionPathExists=/usr/bin/okrainstall
 ConditionPathExists=/var/lib/okrainstall/phase
-Conflicts=getty@tty1.service okrainstall-live.service
+Conflicts=getty@tty1.service okrainstall-live.service serial-getty@ttyS0.service console-getty.service
 
 [Service]
 Type=oneshot
