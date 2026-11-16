@@ -601,6 +601,13 @@ for dir in usr/lib usr/lib64 lib lib64 usr/lib/x86_64-linux-gnu; do
             *.so|*.so.*) ;;
             *) continue ;;
         esac
+        # Sanitizer and profiling runtimes are tens of megabytes each and
+        # nothing on this system links against them. Copying them makes
+        # ldconfig walk a great deal of data at first boot, which under
+        # emulation is slow enough to look like a hang.
+        case ${source##*/} in
+            *asan*|*ubsan*|*tsan*|*lsan*|*gcov*|*profiler*|*debug*) continue ;;
+        esac
         name=${source##*/}
         if [ ! -e "$WORK/target/$dir/$name" ]; then
             cp -aL "$source" "$WORK/target/$dir/$name" 2>/dev/null && copied=$((copied + 1))
@@ -608,6 +615,11 @@ for dir in usr/lib usr/lib64 lib lib64 usr/lib/x86_64-linux-gnu; do
     done
     [ "$copied" -gt 0 ] && step "carried $copied libraries into /$dir"
 done
+# ldconfig walks every library directory and rewrites the loader cache, and it
+# is the last thing the log shows before the boot goes quiet. Nothing here
+# installs into a directory the loader does not already search, so the cache
+# buys nothing and costs a first boot spent reading tens of megabytes.
+ln -sf /dev/null "$WORK/target/etc/systemd/system/ldconfig.service"
 
 # --- bootloader ---------------------------------------------------------------
 # Installed system (stages 2 and 3, and the finished OS) boots with GRUB.
