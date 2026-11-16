@@ -352,49 +352,57 @@ jobs:
           set -uo pipefail
           start_sector=$(sfdisk -d "$DISK" 2>/dev/null \
             | sed -n 's/.*start=[[:space:]]*\([0-9][0-9]*\).*type=0FC63DAF.*/\1/p' | head -n 1)
-          if [ -n "$start_sector" ]; then
-            OFFSET=$((start_sector * 512))
-            MNT=$(mktemp -d)
-            if fuse2fs -o "ro,offset=$OFFSET" "$DISK" "$MNT" 2>/dev/null; then
-              echo "== the finished system"
-              echo -n "phase marker: "
-              if [ -f "$MNT/var/lib/okrainstall/phase" ]; then
-                echo "STILL PRESENT - stage 3 did not clean up" >&2
-              else
-                echo "gone (as stage 3 should leave it)"
-              fi
-              test -f "$MNT/home/okra" && echo "user home present" || echo "user home MISSING"
-              grep -q "^okra:" "$MNT/etc/passwd" && echo "user in passwd" || echo "user MISSING from passwd"
-              grep -q "^okra:" "$MNT/etc/shadow" && echo "user in shadow" || echo "user MISSING from shadow"
-              test -f "$MNT/etc/localtime" && echo "localtime set" || echo "localtime MISSING"
-              test -e "$MNT/usr/bin/okrainstall" && echo "installer STILL THERE" || echo "installer removed"
-              test -e "$MNT/usr/lib/systemd/system/okrainstall-continue.service" \
-                && echo "continue unit STILL THERE" || echo "continue unit removed"
-              ls -l "$MNT/etc/systemd/system/getty.target.wants/" 2>&1 | head -6
-              fusermount -u "$MNT" || fusermount3 -u "$MNT" || true
-            else
-              echo "fuse2fs could not mount the finished system"
-            fi
-            rmdir "$MNT" 2>/dev/null || true
-          else
-            echo "no root partition found"
-          fi
-
-          echo "== what the written disk said"
-          grep -nE 'okrainstall|phase|Stage|FAILED|error' "$BOOTLOG" 2>/dev/null | head -30 || true
-          echo
-          tail -30 "$BOOTLOG" 2>/dev/null || true
-
-          # The claim this step makes is that the disk boots on its own. Say
-          # so, and fail the run when it does not, instead of printing whatever
-          # came out and reporting success either way.
-          if grep -q 'OKRAINSTALL' "$BOOTLOG" 2>/dev/null; then
-            echo "PASS: the written disk booted and reached the installer's stage 2"
-          else
-            echo "FAIL: the written disk did not reach stage 2" >&2
+          if [ -z "$start_sector" ]; then
+            echo "no root partition found" >&2
             exit 1
           fi
-
+          OFFSET=$((start_sector * 512))
+          MNT=$(mktemp -d)
+          if ! fuse2fs -o "ro,offset=$OFFSET" "$DISK" "$MNT" 2>/dev/null; then
+            echo "fuse2fs could not mount the finished system" >&2
+            exit 1
+          fi
+          echo "== the finished system"
+          fails=0
+          report() {
+            if [ "$2" = "yes" ]; then
+              printf '  %-32s %s\n' "$1" "$3"
+            else
+              printf '  %-32s %s\n' "$1" "$3" >&2
+              fails=$((fails + 1))
+            fi
+          }
+          if [ -f "$MNT/var/lib/okrainstall/phase" ]; then
+            report 'phase marker' no 'still present'
+          else
+            report 'phase marker' yes 'gone, as stage 3 should leave it'
+          fi
+          [ -d "$MNT/home/okra" ] && report 'home directory' yes present || report 'home directory' no missing
+          grep -q '^okra:' "$MNT/etc/passwd" && report 'user in passwd' yes present || report 'user in passwd' no missing
+          grep -q '^okra:' "$MNT/etc/shadow" && report 'user in shadow' yes present || report 'user in shadow' no missing
+          [ -f "$MNT/etc/localtime" ] && report 'localtime' yes set || report 'localtime' no missing
+          [ -e "$MNT/usr/bin/okrainstall" ] && report 'installer binary' no 'still there' || report 'installer binary' yes removed
+          [ -e "$MNT/usr/lib/systemd/system/okrainstall-continue.service" ] \
+            && report 'continue unit' no 'still there' || report 'continue unit' yes removed
+          [ -e "$MNT/usr/lib/systemd/system/okrainstall-live.service" ] \
+            && report 'live unit' no 'still there' || report 'live unit' yes removed
+          if [ -L "$MNT/etc/systemd/system/getty.target.wants/getty@tty1.service" ]; then
+            report 'getty on tty1' yes 'linked for the first login'
+          else
+            ls -l "$MNT/etc/systemd/system/getty.target.wants/" 2>&1 | sed 's/^/    /'
+            report 'getty on tty1' no 'not linked'
+          fi
+          echo
+          echo "  shell for the first user:"
+          grep '^okra:' "$MNT/etc/passwd" 2>/dev/null | sed 's/^/    /' || true
+          fusermount -u "$MNT" || fusermount3 -u "$MNT" || true
+          rmdir "$MNT" 2>/dev/null || true
+          echo
+          if [ "$fails" -gt 0 ]; then
+            echo "FAIL: $fails check(s) did not pass" >&2
+            exit 1
+          fi
+          echo 'PASS: the installed system is finished and ready to log in'
       - name: Upload the logs
         if: always()
         uses: actions/upload-artifact@v4
