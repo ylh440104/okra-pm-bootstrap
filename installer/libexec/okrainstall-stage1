@@ -762,7 +762,7 @@ fi
 
 menuentry 'OkraLinux' --class gnu-linux --class gnu --class os {
     search --no-floppy --fs-uuid --set=root $ROOT_UUID
-    linux /boot/vmlinuz root=PARTUUID=$ROOT_PARTUUID rw rootwait init=/sbin/okra-init console=ttyS0,115200n8 console=tty0 nomodeset systemd.show_status=yes systemd.log_level=debug loglevel=7
+    linux /boot/vmlinuz root=PARTUUID=$ROOT_PARTUUID rw rootwait init=/sbin/okra-init console=tty0 console=ttyS0,115200n8 nomodeset systemd.show_status=yes systemd.log_level=debug loglevel=7
 }
 EOF
 
