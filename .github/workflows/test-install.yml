@@ -223,6 +223,11 @@ jobs:
           cat "$MNT/sbin/okra-init" 2>/dev/null | head -60 || echo none
           echo "== stage1 debug"
           cat "$MNT/var/lib/okrainstall/stage1-debug.log" 2>&1 | sed 's/^/  /'
+          echo "== unit counts"
+          for d in usr/lib/systemd/system etc/systemd/system; do
+            printf '%s: ' "$d"
+            ls "$MNT/$d" 2>/dev/null | wc -l
+          done
           echo "== usr/bin mount"
           ls -l "$MNT/usr/bin/mount" "$MNT/usr/bin/umount" 2>&1 | sed 's/^/  /' || true
           echo "== libmount on the disk"
