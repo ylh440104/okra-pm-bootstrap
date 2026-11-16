@@ -358,8 +358,24 @@ jobs:
           fi
           OFFSET=$((start_sector * 512))
           MNT=$(mktemp -d)
-          if ! fuse2fs -o "ro,offset=$OFFSET" "$DISK" "$MNT" 2>/dev/null; then
-            echo "fuse2fs could not mount the finished system" >&2
+          # The machine was stopped by a timeout rather than shut down cleanly,
+          # so the ext4 journal is dirty and a plain read-only mount refuses it.
+          # noload skips the replay and lets the check look at the files anyway.
+          LOOP=$(sudo losetup -f --show -o "$OFFSET" "$DISK" 2>/dev/null || true)
+          mounted=no
+          if [ -n "$LOOP" ]; then
+            if sudo mount -o ro,noload "$LOOP" "$MNT" 2>/dev/null; then
+              mounted=yes
+            fi
+          fi
+          if [ "$mounted" = no ]; then
+            if fuse2fs -o "ro,offset=$OFFSET" "$DISK" "$MNT" 2>/dev/null; then
+              mounted=fuse
+            fi
+          fi
+          if [ "$mounted" = no ]; then
+            echo "could not mount the finished system" >&2
+            [ -n "$LOOP" ] && sudo losetup -d "$LOOP" 2>/dev/null || true
             exit 1
           fi
           echo "== the finished system"
@@ -395,7 +411,12 @@ jobs:
           echo
           echo "  shell for the first user:"
           grep '^okra:' "$MNT/etc/passwd" 2>/dev/null | sed 's/^/    /' || true
-          fusermount -u "$MNT" || fusermount3 -u "$MNT" || true
+          if [ "$mounted" = fuse ]; then
+            fusermount -u "$MNT" || fusermount3 -u "$MNT" || true
+          else
+            sudo umount "$MNT" 2>/dev/null || true
+            [ -n "$LOOP" ] && sudo losetup -d "$LOOP" 2>/dev/null || true
+          fi
           rmdir "$MNT" 2>/dev/null || true
           echo
           if [ "$fails" -gt 0 ]; then
