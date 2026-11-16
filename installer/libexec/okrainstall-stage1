@@ -620,6 +620,28 @@ done
 # installs into a directory the loader does not already search, so the cache
 # buys nothing and costs a first boot spent reading tens of megabytes.
 ln -sf /dev/null "$WORK/target/etc/systemd/system/ldconfig.service"
+# The first boot of a system without a machine ID runs preset-all, which walks
+# all three hundred and seventeen unit files and forks systemctl for each one
+# that carries an [Install] section. Under emulation that is minutes of work,
+# and the boot stops at "Applying preset policy" looking dead. The preset run
+# belongs to installation, not to first boot: run it here, from the live
+# system, and leave the target with its links already in place.
+if [ -x "$WORK/target/usr/bin/systemctl" ]; then
+    mkdir -p "$WORK/target/etc/systemd/system/multi-user.target.wants" \
+             "$WORK/target/etc/systemd/system/getty.target.wants"
+    chroot "$WORK/target" /usr/bin/systemctl preset-all >/dev/null 2>&1 || true
+    step 'ran preset-all during installation instead of first boot'
+fi
+# The preset run above left the continue unit out of the wants directory - it
+# has no [Install] section, so preset skips it by design. Put the link back,
+# the same way it was before.
+mkdir -p "$WORK/target/etc/systemd/system/multi-user.target.wants"
+ln -sfn /usr/lib/systemd/system/okrainstall-continue.service \
+    "$WORK/target/etc/systemd/system/multi-user.target.wants/okrainstall-continue.service"
+# And a machine ID: with one present, first boot skips the preset pass and the
+# machine-id-commit service both.
+[ -s "$WORK/target/etc/machine-id" ] || printf 'uninitialized\\n' \
+    >"$WORK/target/etc/machine-id"
 
 # --- bootloader ---------------------------------------------------------------
 # Installed system (stages 2 and 3, and the finished OS) boots with GRUB.
