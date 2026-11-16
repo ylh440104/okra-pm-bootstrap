@@ -254,6 +254,15 @@ for tool in mount umount; do
             fi
         done
     fi
+    # The units systemd generates for fstab and for tmp.mount name the tool
+    # under /usr/bin, not /bin. Carrying only /bin/mount leaves them with
+    # 203/EXEC even though a working mount is right there on the same disk.
+    if [ -x "$WORK/target/bin/$tool" ] && [ ! -e "$WORK/target/usr/bin/$tool" ]; then
+        mkdir -p "$WORK/target/usr/bin"
+        cp -aL "$WORK/target/bin/$tool" "$WORK/target/usr/bin/$tool" 2>/dev/null \
+            || ln -sfn ../../bin/$tool "$WORK/target/usr/bin/$tool"
+        step "placed $tool where systemd looks for it"
+    fi
 done
 # The squashfs group file has no systemd-journal. journald then fails
 # to chown its socket. Live init writes this group only onto the overlay.
@@ -475,11 +484,26 @@ printf 'okralinux\n' >"$WORK/target/etc/hostname"
 #
 # Edit okra-init rather than wrap it: it is a shell script, and the fix belongs
 # at the point where it mounts things.
+DEBUG_LOG="$WORK/target/var/lib/okrainstall/stage1-debug.log"
+{
+    echo "sbin: $(ls -ld "$WORK/target/sbin" 2>&1)"
+    echo "usr/sbin: $(ls -ld "$WORK/target/usr/sbin" 2>&1)"
+    echo "sbin/okra-init: $(ls -l "$WORK/target/sbin/okra-init" 2>&1)"
+    echo "usr/sbin/okra-init: $(ls -l "$WORK/target/usr/sbin/okra-init" 2>&1)"
+} >>"$DEBUG_LOG" 2>&1 || true
+mkdir -p "$WORK/target/sbin" "$WORK/target/usr/sbin"
+INIT_TARGET=""
 if [ -f "$WORK/target/sbin/okra-init" ]; then
-    if [ ! -f "$WORK/target/sbin/okra-init.orig" ]; then
-        cp -a "$WORK/target/sbin/okra-init" "$WORK/target/sbin/okra-init.orig"
+    INIT_TARGET="$WORK/target/sbin/okra-init"
+elif [ -f "$WORK/target/usr/sbin/okra-init" ]; then
+    INIT_TARGET="$WORK/target/usr/sbin/okra-init"
+fi
+echo "chosen init target: ${INIT_TARGET:-none}" >>"$DEBUG_LOG" 2>&1 || true
+if [ -n "$INIT_TARGET" ]; then
+    if [ ! -f "$INIT_TARGET.orig" ]; then
+        cp -a "$INIT_TARGET" "$INIT_TARGET.orig"
     fi
-    cat >"$WORK/target/sbin/okra-init" <<'OKRAINIT'
+    cat >"$INIT_TARGET" <<'OKRAINIT'
 #!/bin/bash
 # PID 1 before systemd. Absolute paths: the kernel does not set PATH.
 # Create the mount points first. A missing /dev makes the kernel's own
@@ -514,17 +538,18 @@ if [ -f "$WORK/target/sbin/okra-init" ]; then
 /bin/mount -t configfs configfs /sys/kernel/config || true
 exec /usr/lib/systemd/systemd
 OKRAINIT
-    chmod 755 "$WORK/target/sbin/okra-init"
-    if grep -q 'size=20%' "$WORK/target/sbin/okra-init" 2>/dev/null; then
+    chmod 755 "$INIT_TARGET"
+    if grep -q 'size=20%' "$INIT_TARGET" 2>/dev/null; then
         step 'okra-init mounts shm, tmp and cgroup the way systemd expects'
-    elif /bin/grep -q 'size=20%' "$WORK/target/sbin/okra-init" 2>/dev/null; then
-        step 'okra-init mounts shm, tmp and cgroup the way systemd expects'
+        echo "rewrite ok" >>"$DEBUG_LOG" 2>&1 || true
     else
         echo 'okra-init rewrite did not take; restoring the original' >&2
-        cp -a "$WORK/target/sbin/okra-init.orig" "$WORK/target/sbin/okra-init"
+        echo "rewrite failed" >>"$DEBUG_LOG" 2>&1 || true
+        cp -a "$INIT_TARGET.orig" "$INIT_TARGET"
     fi
 else
-    echo 'no /sbin/okra-init on the target; nothing to adjust' >&2
+    echo 'no okra-init on the target; nothing to adjust' >&2
+    echo "no okra-init found" >>"$DEBUG_LOG" 2>&1 || true
 fi
 # systemd loads libmount with dlopen to rewrite mount options, and this rootfs
 # does not carry it. Without it every option it reads back answers EOPNOTSUPP
