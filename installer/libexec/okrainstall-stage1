@@ -581,6 +581,33 @@ if [ -e "$WORK/target/usr/lib/libmount.so.1" ]; then
 else
     echo 'libmount is still missing; systemd will freeze at mount_setup' >&2
 fi
+# The boot now gets past mount_setup, but it stops without failing anything:
+# every unit that started reports success, and the boot simply never reaches
+# multi-user. That is the shape of a service waiting on something, and the
+# services still in flight are the udev ones. udevd is its own binary with its
+# own dependencies, and this rootfs was assembled with only what systemd itself
+# needed - libkmod, libcrypto and the compression libraries are all absent.
+#
+# Rather than chase them one at a time, give the target every shared object the
+# live tree has. They are all built against the same libc, and a system that
+# cannot load a library is indistinguishable from one that hangs.
+for dir in usr/lib usr/lib64 lib lib64 usr/lib/x86_64-linux-gnu; do
+    [ -d "$LIVE_ROOT/$dir" ] || continue
+    mkdir -p "$WORK/target/$dir"
+    copied=0
+    for source in "$LIVE_ROOT/$dir"/*; do
+        [ -e "$source" ] || continue
+        case $source in
+            *.so|*.so.*) ;;
+            *) continue ;;
+        esac
+        name=${source##*/}
+        if [ ! -e "$WORK/target/$dir/$name" ]; then
+            cp -aL "$source" "$WORK/target/$dir/$name" 2>/dev/null && copied=$((copied + 1))
+        fi
+    done
+    [ "$copied" -gt 0 ] && step "carried $copied libraries into /$dir"
+done
 
 # --- bootloader ---------------------------------------------------------------
 # Installed system (stages 2 and 3, and the finished OS) boots with GRUB.
@@ -701,7 +728,7 @@ fi
 
 menuentry 'OkraLinux' --class gnu-linux --class gnu --class os {
     search --no-floppy --fs-uuid --set=root $ROOT_UUID
-    linux /boot/vmlinuz root=PARTUUID=$ROOT_PARTUUID rw rootwait init=/sbin/okra-init console=ttyS0,115200n8 console=tty0 nomodeset systemd.show_status=yes
+    linux /boot/vmlinuz root=PARTUUID=$ROOT_PARTUUID rw rootwait init=/sbin/okra-init console=ttyS0,115200n8 console=tty0 nomodeset systemd.show_status=yes systemd.log_level=debug loglevel=7
 }
 EOF
 
