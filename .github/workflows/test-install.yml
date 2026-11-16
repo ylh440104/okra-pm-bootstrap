@@ -276,6 +276,14 @@ jobs:
               send_key '\r'
               echo "  stage 2 done acknowledged; rebooting into stage 3" >&2
             fi
+            # systemd prints 'Hostname set to <okralinux>' on every boot, and the
+            # last run matched that instead of stage 3's question: the Enter it
+            # sent arrived before any prompt existed and was thrown away, so the
+            # install sat waiting on the hostname forever. Wait for the stage 3
+            # heading first, then for the question itself.
+            if await 'Stage 3' 900; then
+              echo "  stage 3 is up" >&2
+            fi
             if await 'Hostname' 900; then
               sleep 5
               send_key '\r'
@@ -397,5 +405,6 @@ jobs:
             ${{ runner.temp }}/boot.log
             ${{ runner.temp }}/driver.log
             ${{ runner.temp }}/driver2.log
+            ${{ runner.temp }}/boot2.log
           if-no-files-found: warn
           retention-days: 14
