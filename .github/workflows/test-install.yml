@@ -221,6 +221,9 @@ jobs:
           ls -l "$MNT/sbin/okra-init" "$MNT/sbin/okra-init.real" "$MNT/usr/sbin/okra-init" 2>&1 | sed 's/^/  /' || true
           echo "== okra-init full"
           cat "$MNT/sbin/okra-init" 2>/dev/null | head -60 || echo none
+          echo "== libmount on the disk"
+          ls -l "$MNT/usr/lib/libmount.so.1.1.0" "$MNT/lib/libmount.so.1.1.0" "$MNT/usr/lib/libmount.so.1" 2>&1 | sed 's/^/  /' || true
+          find "$MNT/usr/lib" "$MNT/lib" -maxdepth 2 -name 'libmount*' 2>/dev/null | head -4
           echo "== fstab"
           cat "$MNT/etc/fstab" 2>&1
               fusermount -u "$MNT" || fusermount3 -u "$MNT" || true

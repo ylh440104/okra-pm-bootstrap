@@ -526,6 +526,36 @@ OKRAINIT
 else
     echo 'no /sbin/okra-init on the target; nothing to adjust' >&2
 fi
+# systemd loads libmount with dlopen to rewrite mount options, and this rootfs
+# does not carry it. Without it every option it reads back answers EOPNOTSUPP
+# and mount_setup() freezes the boot before a single unit runs. Carrying the
+# library across is the difference between a system that reports its mounts
+# and one that cannot start.
+for lib in libmount.so.1.1.0 libblkid.so.1.1.0; do
+    if [ ! -e "$WORK/target/usr/lib/$lib" ] && [ ! -e "$WORK/target/lib/$lib" ]; then
+        for candidate in "$LIVE_ROOT/usr/lib/$lib" "$LIVE_ROOT/lib/$lib" \
+                         "/usr/lib/$lib" "/lib/$lib"; do
+            if [ -e "$candidate" ]; then
+                mkdir -p "$WORK/target/usr/lib"
+                cp -aL "$candidate" "$WORK/target/usr/lib/$lib"
+                step "carried $lib from $candidate"
+                break
+            fi
+        done
+    fi
+    case $lib in
+        libmount.so.1.1.0) soname=libmount.so.1 ;;
+        libblkid.so.1.1.0) soname=libblkid.so.1 ;;
+    esac
+    if [ -e "$WORK/target/usr/lib/$lib" ]; then
+        ln -sfn "$lib" "$WORK/target/usr/lib/$soname"
+    fi
+done
+if [ -e "$WORK/target/usr/lib/libmount.so.1" ]; then
+    step 'libmount is on the target; systemd can read its own mounts'
+else
+    echo 'libmount is still missing; systemd will freeze at mount_setup' >&2
+fi
 
 # --- bootloader ---------------------------------------------------------------
 # Installed system (stages 2 and 3, and the finished OS) boots with GRUB.
