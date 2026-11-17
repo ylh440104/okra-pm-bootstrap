@@ -134,6 +134,13 @@ _stage3_cleanup() {
     mkdir -p /etc/systemd/system/getty.target.wants
     ln -sfn /usr/lib/systemd/system/getty@.service \
         /etc/systemd/system/getty.target.wants/getty@tty1.service
+    # The install ran on the serial console, so the finished system should
+    # offer a login there too. serial-getty@ is conditioned on the device
+    # existing, so on hardware with no serial port the link is inert.
+    if [ -e /usr/lib/systemd/system/serial-getty@.service ]; then
+        ln -sfn /usr/lib/systemd/system/serial-getty@.service \
+            /etc/systemd/system/getty.target.wants/serial-getty@ttyS0.service
+    fi
     systemctl daemon-reload 2>/dev/null || true
 
     rm -f /usr/bin/kanina-tui /usr/bin/kanina-live /usr/bin/kanina-installer \

@@ -55,7 +55,44 @@ _stage2_configure_base() {
     if [ ! -s /etc/hostname ]; then
         printf 'okralinux\n' >/etc/hostname
     fi
-
+    # The Base OS ships networkd, resolved and timesyncd but nothing enables
+    # them, so the installed machine would come up deaf: no DHCP, no DNS, no
+    # clock sync. One DHCP network file for every wired interface plus wants
+    # links is the smallest configuration that changes that. The links are
+    # written to the config directory, so the reboot into stage 3 - and every
+    # boot after it - picks them up.
+    if [ -d /etc/systemd/network ]; then
+        printf '[Match]\nName=en* eth*\n\n[Network]\nDHCP=yes\n' \
+            >/etc/systemd/network/20-wired.network
+    fi
+    for unit in systemd-networkd.service systemd-resolved.service \
+                systemd-timesyncd.service; do
+        [ -e "/usr/lib/systemd/system/$unit" ] || continue
+        case "$unit" in
+            systemd-networkd.service)
+                mkdir -p /etc/systemd/system/multi-user.target.wants
+                ln -sfn "/usr/lib/systemd/system/$unit" \
+                    "/etc/systemd/system/multi-user.target.wants/$unit"
+                ;;
+            *)
+                mkdir -p /etc/systemd/system/sysinit.target.wants
+                ln -sfn "/usr/lib/systemd/system/$unit" \
+                    "/etc/systemd/system/sysinit.target.wants/$unit"
+                ;;
+        esac
+    done
+    # resolved owns the stub resolver at /run/systemd/resolve; point the
+    # system resolv.conf at it so name resolution goes through resolved.
+    if [ -e /usr/lib/systemd/system/systemd-resolved.service ] \
+        && { [ -L /etc/resolv.conf ] || [ ! -e /etc/resolv.conf ]; }; then
+        ln -sfn /run/systemd/resolve/stub-resolv.conf /etc/resolv.conf
+    fi
+    # sudo is in the Base OS and stage 3 puts the first user in wheel, but
+    # without a sudoers rule for wheel that membership grants nothing.
+    if [ -d /etc/sudoers.d ] && [ ! -f /etc/sudoers.d/10-wheel ]; then
+        printf '%%wheel ALL=(ALL:ALL) ALL\n' >/etc/sudoers.d/10-wheel
+        chmod 440 /etc/sudoers.d/10-wheel
+    fi
     disable_unit okrainstall-live.service /
     enable_unit okrainstall-continue.service /
 }

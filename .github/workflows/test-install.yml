@@ -417,6 +417,32 @@ jobs:
             ls -l "$MNT/etc/systemd/system/getty.target.wants/" 2>&1 | sed 's/^/    /'
             report 'getty on tty1' no 'not linked'
           fi
+          if [ -L "$MNT/etc/systemd/system/getty.target.wants/serial-getty@ttyS0.service" ]; then
+            report 'getty on the serial console' yes 'linked for headless login'
+          else
+            report 'getty on the serial console' no 'not linked'
+          fi
+          if grep -q '^DHCP=yes' "$MNT/etc/systemd/network/20-wired.network" 2>/dev/null; then
+            report 'DHCP network file' yes 'wired interfaces ask for DHCP'
+          else
+            report 'DHCP network file' no 'missing'
+          fi
+          [ -L "$MNT/etc/systemd/system/multi-user.target.wants/systemd-networkd.service" ] \
+            && report 'networkd' yes enabled || report 'networkd' no 'not enabled'
+          [ -L "$MNT/etc/systemd/system/sysinit.target.wants/systemd-timesyncd.service" ] \
+            && report 'timesyncd' yes enabled || report 'timesyncd' no 'not enabled'
+          if [ -f "$MNT/etc/sudoers.d/10-wheel" ]; then
+            report 'sudo for wheel' yes 'rule written'
+          else
+            report 'sudo for wheel' no 'no rule'
+          fi
+          for t in ip ping passwd fsck.ext4 tar find; do
+            if [ -e "$MNT/usr/bin/$t" ] || [ -e "$MNT/bin/$t" ]; then
+              report "tool $t" yes present
+            else
+              report "tool $t" no missing
+            fi
+          done
           echo
           echo "  shell for the first user:"
           grep '^okra:' "$MNT/etc/passwd" 2>/dev/null | sed 's/^/    /' || true
