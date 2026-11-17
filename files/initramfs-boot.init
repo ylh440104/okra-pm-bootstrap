@@ -9,11 +9,15 @@ rescue() {
     echo "okra-initramfs: $1 - dropping to a shell" >/dev/console
     exec /bin/sh
 }
+# The archive holds only bin/, usr/lib, lib64 and this file. Every mount
+# point has to exist before the mount that fills it, exactly like the live
+# init does: rootfs inside the archive is an empty directory tree otherwise.
+/bin/mkdir -p /proc /sys /dev /run /root \
+    /dev/shm /dev/pts /dev/hugepages /dev/mqueue \
+    /sys/fs/cgroup /sys/kernel/debug /sys/kernel/tracing /sys/kernel/config
 /bin/mount -t proc proc /proc || rescue 'no proc'
 /bin/mount -t sysfs sysfs /sys || rescue 'no sysfs'
 /bin/mount -t devtmpfs -o mode=0755 devtmpfs /dev || rescue 'no devtmpfs'
-/bin/mkdir -p /dev/shm /dev/pts /dev/hugepages /dev/mqueue /run /root \
-    /sys/fs/cgroup /sys/kernel/debug /sys/kernel/tracing /sys/kernel/config
 /bin/mount -t tmpfs -o mode=01777 tmpfs /dev/shm || true
 /bin/mount -t devpts -o mode=0620,ptmxmode=0666,gid=5 devpts /dev/pts || true
 /bin/mount -t tmpfs -o mode=0755 tmpfs /run || true
