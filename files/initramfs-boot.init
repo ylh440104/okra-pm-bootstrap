@@ -39,6 +39,10 @@ done
 [ -n "$arg_root" ] || rescue 'no root= on the kernel command line'
 
 ROOTDEV=
+# The bare identifier only: blkid prints the partition UUID as
+# PART_ENTRY_UUID="<id>", so a pattern that repeats the root= syntax - like
+# "=PARTUUID=<id>" - matches nothing no matter how many times it runs.
+Id=${arg_root#*=}
 Waited=0
 while [ "$Waited" -lt 60 ]; do
     Hit=
@@ -46,8 +50,7 @@ while [ "$Waited" -lt 60 ]; do
         PARTUUID=*|UUID=*)
             for dev in /dev/vd*[0-9] /dev/sd*[0-9] /dev/nvme*n*; do
                 [ -b "$dev" ] || continue
-                if /bin/blkid -p -o udev -s PARTUUID -s UUID "$dev" 2>/dev/null \
-                    | /bin/grep -q "=$arg_root"; then
+                if /bin/blkid -p "$dev" 2>/dev/null | /bin/grep -q "$Id"; then
                     Hit=$dev
                     break
                 fi
