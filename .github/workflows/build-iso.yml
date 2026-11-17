@@ -358,7 +358,7 @@ jobs:
           rm -rf "$INITRAMFS_TREE/bin"
           mkdir -p "$INITRAMFS_TREE/bin"
 
-          for Tool in ln cat rm cp chmod mkdir sleep readlink bash mount umount switch_root; do
+          for Tool in ln cat rm cp chmod mkdir sleep readlink bash mount umount switch_root blkid grep; do
             Source=""
             for Directory in usr/bin usr/sbin bin sbin; do
               if [ -x "$ROOTFS/$Directory/$Tool" ]; then Source="/$Directory/$Tool"; break; fi
