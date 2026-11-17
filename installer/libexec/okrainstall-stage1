@@ -686,9 +686,17 @@ fi
 mkdir -p "$WORK/target/boot/grub2/themes"
 efi_mkdirs
 cp "$KERNEL" "$WORK/target/boot/vmlinuz"
-
 ROOT_PARTUUID=$(blkid -s PARTUUID -o value "$ROOT")
 [ -n "$ROOT_PARTUUID" ] || { echo 'failed to read root PARTUUID' >&2; exit 1; }
+# The grub entry is written knowing whether the initramfs was copied, not
+# tested at boot time: the standalone GRUB image carries no test.mod, so an
+# `if [ -f ... ]` in grub.cfg fails closed and silently takes the fallback.
+if [ -f "$WORK/target/boot/initramfs" ]; then
+    KERNEL_LINES="    linux /boot/vmlinuz root=PARTUUID=$ROOT_PARTUUID rw rootwait console=tty0 console=ttyS0,115200n8 nomodeset systemd.show_status=yes systemd.log_level=debug loglevel=7
+    initrd /boot/initramfs"
+else
+    KERNEL_LINES="    linux /boot/vmlinuz root=PARTUUID=$ROOT_PARTUUID rw rootwait init=/sbin/okra-init console=tty0 console=ttyS0,115200n8 nomodeset systemd.show_status=yes systemd.log_level=debug loglevel=7"
+fi
 
 first_existing() {
     local c
@@ -787,12 +795,7 @@ fi
 
 menuentry 'OkraLinux' --class gnu-linux --class gnu --class os {
     search --no-floppy --fs-uuid --set=root $ROOT_UUID
-    if [ -f /boot/initramfs ]; then
-        linux /boot/vmlinuz root=PARTUUID=$ROOT_PARTUUID rw rootwait console=tty0 console=ttyS0,115200n8 nomodeset systemd.show_status=yes systemd.log_level=debug loglevel=7
-        initrd /boot/initramfs
-    else
-        linux /boot/vmlinuz root=PARTUUID=$ROOT_PARTUUID rw rootwait init=/sbin/okra-init console=tty0 console=ttyS0,115200n8 nomodeset systemd.show_status=yes systemd.log_level=debug loglevel=7
-    fi
+$KERNEL_LINES
 }
 EOF
 
