@@ -436,13 +436,18 @@ jobs:
           else
             report 'sudo for wheel' no 'no rule'
           fi
-          for t in ip ping passwd fsck.ext4 tar find; do
+          for t in ip ping passwd tar find; do
             if [ -e "$MNT/usr/bin/$t" ] || [ -e "$MNT/bin/$t" ]; then
               report "tool $t" yes present
             else
               report "tool $t" no missing
             fi
           done
+          if find "$MNT/usr" "$MNT" -xdev -name fsck.ext4 -o -name e2fsck 2>/dev/null | grep -q .; then
+            report 'tool fsck (ext4)' yes present
+          else
+            report 'tool fsck (ext4)' no missing
+          fi
           echo
           echo "  shell for the first user:"
           grep '^okra:' "$MNT/etc/passwd" 2>/dev/null | sed 's/^/    /' || true
