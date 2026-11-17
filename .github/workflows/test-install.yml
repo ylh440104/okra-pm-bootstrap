@@ -443,6 +443,16 @@ jobs:
               report "tool $t" no missing
             fi
           done
+          if [ -f "$MNT/boot/initramfs" ]; then
+            report 'initramfs on the boot disk' yes present
+          else
+            report 'initramfs on the boot disk' no missing
+          fi
+          if grep -q 'initrd /boot/initramfs' "$MNT/boot/grub2/grub.cfg" 2>/dev/null; then
+            report 'grub loads the initramfs' yes yes
+          else
+            report 'grub loads the initramfs' no 'no initrd line'
+          fi
           # e2fsprogs puts its checker in usr/sbin. When it is not there the
           # archive shipped it and something between the archive and the disk
           # dropped it, so report what sbin actually holds before failing.

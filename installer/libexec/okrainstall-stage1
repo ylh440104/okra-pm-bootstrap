@@ -664,6 +664,24 @@ if [ -z "$KERNEL" ]; then
     done
 fi
 [ -n "${KERNEL:-}" ] && [ -f "$KERNEL" ] || { echo 'kernel image not found' >&2; exit 1; }
+# An initramfs moves the root-mounting work off the kernel command line and
+# into an /init that can wait for the device and mount with exactly the
+# options systemd expects. It is optional: without one the kernel mounts the
+# root directly and okra-init keeps doing the job, so an older live medium
+# still installs a bootable system.
+INITRAMFS=${OKRAINSTALL_INITRAMFS:-}
+if [ -z "$INITRAMFS" ]; then
+    for c in "$LIVE_MEDIA/boot/initramfs-boot.img" /run/live/media/boot/initramfs-boot.img \
+             "$LIVE_ROOT/boot/initramfs-boot.img" /boot/initramfs-boot.img; do
+        [ -f "$c" ] && { INITRAMFS=$c; break; }
+    done
+fi
+if [ -n "${INITRAMFS:-}" ] && [ -f "$INITRAMFS" ]; then
+    step "installing initramfs $(basename "$INITRAMFS")"
+    cp "$INITRAMFS" "$WORK/target/boot/initramfs"
+else
+    step 'no initramfs on the live medium; keeping direct root mount'
+fi
 
 mkdir -p "$WORK/target/boot/grub2/themes"
 efi_mkdirs
@@ -769,7 +787,12 @@ fi
 
 menuentry 'OkraLinux' --class gnu-linux --class gnu --class os {
     search --no-floppy --fs-uuid --set=root $ROOT_UUID
-    linux /boot/vmlinuz root=PARTUUID=$ROOT_PARTUUID rw rootwait init=/sbin/okra-init console=tty0 console=ttyS0,115200n8 nomodeset systemd.show_status=yes systemd.log_level=debug loglevel=7
+    if [ -f /boot/initramfs ]; then
+        linux /boot/vmlinuz root=PARTUUID=$ROOT_PARTUUID rw rootwait console=tty0 console=ttyS0,115200n8 nomodeset systemd.show_status=yes systemd.log_level=debug loglevel=7
+        initrd /boot/initramfs
+    else
+        linux /boot/vmlinuz root=PARTUUID=$ROOT_PARTUUID rw rootwait init=/sbin/okra-init console=tty0 console=ttyS0,115200n8 nomodeset systemd.show_status=yes systemd.log_level=debug loglevel=7
+    fi
 }
 EOF
 

@@ -403,6 +403,19 @@ jobs:
           ( cd "$INITRAMFS_TREE" && find . -print0 | cpio --null -o -H newc 2>/dev/null | gzip -9 ) \
             > "$ISO_ROOT/boot/initramfs-live.img"
           ls -l "$ISO_ROOT/boot/" "$ISO_ROOT/LiveOS/"
+          # The installed system gets its own initramfs from the same tree:
+          # every binary and library is already there and proven on the live
+          # path, so only /init differs. It waits for the root device, mounts
+          # with the options systemd cannot rewrite (no libmount in the target
+          # either), and switch_roots into systemd - the same job okra-init
+          # did from inside the root, moved where Arch keeps it.
+          cp "$GITHUB_WORKSPACE/files/initramfs-boot.init" "$INITRAMFS_TREE/init"
+          chmod 755 "$INITRAMFS_TREE/init"
+          ( cd "$INITRAMFS_TREE" && find . -print0 | cpio --null -o -H newc 2>/dev/null | gzip -9 ) \
+            > "$ISO_ROOT/boot/initramfs-boot.img"
+          ls -l "$ISO_ROOT/boot/initramfs-boot.img"
+          echo "== the boot initramfs init is"
+          head -8 "$INITRAMFS_TREE/init"
 
       - name: Assemble the ISO
         run: |

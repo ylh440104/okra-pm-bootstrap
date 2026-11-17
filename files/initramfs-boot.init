@@ -1,0 +1,100 @@
+#!/bin/bash
+# /init inside the installed system's initramfs.
+# The kernel hands over right after unpacking: this script waits for the root
+# device, mounts everything with the exact options systemd's mount_setup()
+# would use (it cannot rewrite options without libmount - the entire reason
+# okra-init exists), and execs systemd as PID 1.
+# Absolute paths everywhere: the kernel does not set PATH.
+rescue() {
+    echo "okra-initramfs: $1 - dropping to a shell" >/dev/console
+    exec /bin/sh
+}
+/bin/mount -t proc proc /proc || rescue 'no proc'
+/bin/mount -t sysfs sysfs /sys || rescue 'no sysfs'
+/bin/mount -t devtmpfs -o mode=0755 devtmpfs /dev || rescue 'no devtmpfs'
+/bin/mkdir -p /dev/shm /dev/pts /dev/hugepages /dev/mqueue /run /root \
+    /sys/fs/cgroup /sys/kernel/debug /sys/kernel/tracing /sys/kernel/config
+/bin/mount -t tmpfs -o mode=01777 tmpfs /dev/shm || true
+/bin/mount -t devpts -o mode=0620,ptmxmode=0666,gid=5 devpts /dev/pts || true
+/bin/mount -t tmpfs -o mode=0755 tmpfs /run || true
+
+echo 'okra-initramfs: starting' >/dev/console
+echo 'okra-initramfs: starting' >/dev/kmsg 2>/dev/null || true
+
+# root= came from the kernel command line: PARTUUID=<uuid>, UUID=<uuid> or
+# /dev/<name>. Turn it into a /dev path. blkid lives in bin/ beside the tools.
+arg_root=
+arg_rw=rw
+for arg in $(cat /proc/cmdline); do
+    case "$arg" in
+        root=*)  arg_root=${arg#root=} ;;
+        ro)      arg_rw=ro ;;
+        rw)      arg_rw=rw ;;
+    esac
+done
+[ -n "$arg_root" ] || rescue 'no root= on the kernel command line'
+
+ROOTDEV=
+Waited=0
+while [ "$Waited" -lt 60 ]; do
+    Hit=
+    case "$arg_root" in
+        PARTUUID=*|UUID=*)
+            for dev in /dev/vd*[0-9] /dev/sd*[0-9] /dev/nvme*n*; do
+                [ -b "$dev" ] || continue
+                if /bin/blkid -p -o udev -s PARTUUID -s UUID "$dev" 2>/dev/null \
+                    | /bin/grep -q "=$arg_root"; then
+                    Hit=$dev
+                    break
+                fi
+            done
+            ;;
+        /dev/*)
+            [ -b "$arg_root" ] && Hit=$arg_root
+            ;;
+        *)
+            [ -b "$arg_root" ] && Hit=$arg_root
+            ;;
+    esac
+    [ -n "$Hit" ] && { ROOTDEV=$Hit; break; }
+    if [ "$Waited" = 0 ]; then
+        echo "okra-initramfs: waiting for $arg_root" >/dev/console
+    fi
+    /bin/sleep 1
+    Waited=$((Waited + 1))
+done
+[ -n "$ROOTDEV" ] || rescue "root device $arg_root never appeared"
+
+# A device node that exists is not a device that is ready; give virtio and
+# NVMe a moment to finish probing before the mount attempt.
+/bin/sleep 2
+
+echo "okra-initramfs: mounting $ROOTDEV $arg_rw on /root" >/dev/console
+/bin/mount -t ext4 -o "$arg_rw" "$ROOTDEV" /root || rescue "could not mount $ROOTDEV"
+
+[ -x /root/usr/lib/systemd/systemd ] || rescue 'no systemd on the root'
+
+# Filesystems systemd would mount itself but cannot: no libmount means its
+# .mount units answer EOPNOTSUPP. Same options okra-init proved in okra-init,
+# because those are the ones systemd's own mount table shows.
+/bin/mount -t cgroup2 -o nsdelegate,memory_recursiveprot,memory_hugetlb_accounting \
+    cgroup2 /root/sys/fs/cgroup \
+    || /bin/mount -t cgroup2 cgroup2 /root/sys/fs/cgroup || true
+/bin/mount -t tmpfs -o mode=01777,size=20%,nr_inodes=800k tmpfs /root/tmp \
+    || /bin/mount -t tmpfs -o mode=01777 tmpfs /root/tmp || true
+/bin/mount -t hugetlbfs hugetlbfs /root/dev/hugepages || true
+/bin/mount -t mqueue mqueue /root/dev/mqueue || true
+/bin/mount -t debugfs debugfs /root/sys/kernel/debug || true
+/bin/mount -t tracefs tracefs /root/sys/kernel/tracing || true
+/bin/mount -t configfs configfs /root/sys/kernel/config || true
+
+# Move proc, sys, dev and run into the new root so systemd sees a machine
+# that is already up rather than one it has to assemble.
+/bin/mount -o move /proc /root/proc || true
+/bin/mount -o move /sys /root/sys || true
+/bin/mount -o move /dev /root/dev || true
+/bin/mount -o move /run /root/run || true
+
+cd /root || rescue 'cannot cd to /root'
+echo 'okra-initramfs: switching root to systemd' >/dev/console
+exec /sbin/switch_root /root /usr/lib/systemd/systemd
