@@ -443,10 +443,19 @@ jobs:
               report "tool $t" no missing
             fi
           done
-          if find "$MNT/usr" "$MNT" -xdev -name fsck.ext4 -o -name e2fsck 2>/dev/null | grep -q .; then
+          # e2fsprogs puts its checker in usr/sbin. When it is not there the
+          # archive shipped it and something between the archive and the disk
+          # dropped it, so report what sbin actually holds before failing.
+          if [ -e "$MNT/usr/sbin/e2fsck" ] || [ -e "$MNT/usr/sbin/fsck.ext4" ]; then
             report 'tool fsck (ext4)' yes present
           else
             report 'tool fsck (ext4)' no missing
+            echo "    usr/sbin holds:" >&2
+            ls "$MNT/usr/sbin" 2>/dev/null | sed 's/^/      /' >&2 || echo '      (no usr/sbin at all)' >&2
+            echo "    anything named *fsck* on the disk:" >&2
+            find "$MNT" -xdev -name '*fsck*' 2>/dev/null | sed 's/^/      /' >&2
+            echo "    mkfs tools:" >&2
+            find "$MNT" -xdev -name 'mkfs*' 2>/dev/null | sed 's/^/      /' >&2
           fi
           echo
           echo "  shell for the first user:"
