@@ -149,7 +149,7 @@ _stage3_cleanup() {
         cat >/etc/systemd/system/serial-getty@ttyS0.service.d/override.conf <<'GETTYOVERRIDE'
 [Service]
 ExecStart=
-ExecStart=-/sbin/agetty -L 115200 ttyS0 linux
+ExecStart=-/sbin/agetty -L ttyS0 115200 linux
 GETTYOVERRIDE
     fi
     systemctl daemon-reload 2>/dev/null || true
