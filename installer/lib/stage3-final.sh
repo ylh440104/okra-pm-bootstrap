@@ -140,6 +140,17 @@ _stage3_cleanup() {
     if [ -e /usr/lib/systemd/system/serial-getty@.service ]; then
         ln -sfn /usr/lib/systemd/system/serial-getty@.service \
             /etc/systemd/system/getty.target.wants/serial-getty@ttyS0.service
+        # The stock unit starts agetty with -o '-p -- \u' --keep-baud and a
+        # terminal type taken from the environment; on this system that
+        # agetty opens the line and produces no prompt at all, while the same
+        # binary started by hand with -L and an explicit type does reach
+        # login. Use the command line that was seen working.
+        mkdir -p /etc/systemd/system/serial-getty@ttyS0.service.d
+        cat >/etc/systemd/system/serial-getty@ttyS0.service.d/override.conf <<'GETTYOVERRIDE'
+[Service]
+ExecStart=
+ExecStart=-/sbin/agetty -L 115200 ttyS0 linux
+GETTYOVERRIDE
     fi
     systemctl daemon-reload 2>/dev/null || true
 
