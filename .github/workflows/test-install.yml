@@ -643,6 +643,14 @@ jobs:
               report "tool $t" no missing
             fi
           done
+          # agetty can be present, run, and still find nothing to open: the
+          # node exists only once the kernel's 8250 driver registers the port.
+          # Assert the node itself, not just the unit that would use it.
+          if [ -c "$MNT/dev/ttyS0" ]; then
+            report 'serial device node' yes 'dev/ttyS0 is a character device'
+          else
+            report 'serial device node' no 'dev/ttyS0 missing'
+          fi
           for f in sbin/agetty bin/login usr/bin/passwd etc/pam.d/login; do
             if [ -e "$MNT/$f" ]; then
               report "$f" yes present
