@@ -458,6 +458,86 @@ jobs:
             exit 1
           fi
           echo 'PASS: the finished system logs in and can administer itself'
+      - name: Find out why the serial line has no login
+        if: always()
+        env:
+          SECONDS_TO_RUN: 420
+          BOOTLOG: ${{ runner.temp }}/boot4.log
+          DISK: ${{ runner.temp }}/disk.img
+        run: |
+          set -uo pipefail
+          OVMF_CODE=/usr/share/OVMF/OVMF_CODE_4M.fd
+          OVMF_VARS=/usr/share/OVMF/OVMF_VARS_4M.fd
+          [ -f "$OVMF_CODE" ] || OVMF_CODE=/usr/share/OVMF/OVMF_CODE.fd
+          [ -f "$OVMF_VARS" ] || OVMF_VARS=/usr/share/OVMF/OVMF_VARS.fd
+          cp "$OVMF_VARS" "$RUNNER_TEMP/ovmf-vars4.fd"
+          FIFO="$RUNNER_TEMP/fifo4"
+          DRIVER="$RUNNER_TEMP/driver4.log"
+          rm -f "$FIFO"; mkfifo "$FIFO"
+          # The third grub entry runs /bin/bash as init: no systemd, no
+          # services, just a root shell on the console. It is the only place
+          # agetty can be started by hand and allowed to print its own reason.
+          drive() {
+            await() {
+              waited=0
+              while [ "$waited" -lt "$2" ]; do
+                grep -q "$1" "$BOOTLOG" 2>/dev/null && return 0
+                sleep 3
+                waited=$((waited + 3))
+              done
+              echo "  (never saw: $1)" >&2
+              return 1
+            }
+            send_key() { printf '%b' "$1"; }
+            sleep 40
+            send_key '\r'
+            sleep 4
+            send_key 'echo DIAG_START\r'
+            await 'DIAG_START' 60 || true
+            sleep 2
+            send_key 'mount -t proc proc /proc; mount -t sysfs sysfs /sys; mount -t devtmpfs devtmpfs /dev\r'
+            sleep 4
+            send_key 'echo DIAG_LS; ls -l /dev/ttyS0 /dev/tty1 /sbin/agetty /bin/login 2>&1; echo DIAG_LS_END\r'
+            await 'DIAG_LS_END' 90 || true
+            sleep 2
+            send_key 'echo DIAG_RUN; /sbin/agetty --version 2>&1 | head -3; echo DIAG_RUN_END\r'
+            await 'DIAG_RUN_END' 90 || true
+            sleep 2
+            send_key 'echo DIAG_PAM; ls /etc/pam.d 2>&1; echo DIAG_PAM_END\r'
+            await 'DIAG_PAM_END' 90 || true
+            sleep 2
+            send_key 'echo DIAG_END\r'
+            await 'DIAG_END' 60 || true
+          }
+          drive > "$FIFO" 2> "$DRIVER" &
+          start_sector=$(sfdisk -d "$DISK" 2>/dev/null \
+            | sed -n 's/.*start=[[:space:]]*\([0-9][0-9]*\).*type=0FC63DAF.*/\1/p' | head -n 1)
+          OFFSET=$(( ${start_sector:-0} * 512 ))
+          PARTUUID=$(blkid -p -o value -s PARTUUID -O "$OFFSET" "$DISK" 2>/dev/null || true)
+          echo "  root PARTUUID=$PARTUUID at offset $OFFSET" >&2
+          MNT=$(mktemp -d)
+          LOOP=$(sudo losetup -f --show -o "$OFFSET" "$DISK" 2>/dev/null || true)
+          if [ -n "$LOOP" ] && sudo mount -o ro,noload "$LOOP" "$MNT" 2>/dev/null; then
+            sudo cp "$MNT/boot/vmlinuz" "$RUNNER_TEMP/vmlinuz-boot" 2>/dev/null || true
+            sudo cp "$MNT/boot/initramfs" "$RUNNER_TEMP/initramfs-boot.img" 2>/dev/null || true
+            sudo umount "$MNT" 2>/dev/null || true
+            sudo losetup -d "$LOOP" 2>/dev/null || true
+          fi
+          rmdir "$MNT" 2>/dev/null || true
+          ls -l "$RUNNER_TEMP/vmlinuz-boot" "$RUNNER_TEMP/initramfs-boot.img" 2>&1 | sed 's/^/    /' >&2 || true
+          timeout "${SECONDS_TO_RUN}" qemu-system-x86_64 \
+            -m 2048 -smp 2 -accel tcg \
+            -drive "file=$DISK,format=raw,if=virtio" \
+            -kernel "$RUNNER_TEMP/vmlinuz-boot" \
+            -append "root=PARTUUID=$PARTUUID rw rootwait init=/bin/bash console=tty0 console=ttyS0,115200n8" \
+            -display none -serial stdio \
+            < "$FIFO" > "$BOOTLOG" 2>&1 || true
+          kill "$(jobs -p)" 2>/dev/null || true
+          rm -f "$FIFO"
+          echo "== what the recovery session did"
+          cat "$DRIVER" 2>/dev/null || true
+          echo "== the console"
+          sed 's/\r//' "$BOOTLOG" 2>/dev/null | tail -60 || true
       - name: Verify the finished system
         if: always()
         env:
@@ -624,6 +704,8 @@ jobs:
             ${{ runner.temp }}/install.log
             ${{ runner.temp }}/boot3.log
             ${{ runner.temp }}/driver3.log
+            ${{ runner.temp }}/boot4.log
+            ${{ runner.temp }}/driver4.log
             ${{ runner.temp }}/boot.log
             ${{ runner.temp }}/driver.log
             ${{ runner.temp }}/driver2.log
