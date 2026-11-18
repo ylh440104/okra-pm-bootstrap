@@ -510,17 +510,24 @@ jobs:
             await 'DIAG_END' 60 || true
           }
           drive > "$FIFO" 2> "$DRIVER" &
-          # blkid has no offset option; the partition has to be attached to a
-          # loop device first and asked there. Getting this wrong passes an
-          # empty root= to the kernel, which then has nothing to mount.
-          start_sector=$(sfdisk -d "$DISK" 2>/dev/null \
-            | sed -n 's/.*start=[[:space:]]*\([0-9][0-9]*\).*type=0FC63DAF.*/\1/p' | head -n 1)
-          OFFSET=$(( ${start_sector:-0} * 512 ))
-          LOOP=$(sudo losetup -f --show -o "$OFFSET" "$DISK" 2>/dev/null || true)
+          # PARTUUID lives in the partition table, not in the filesystem, so a
+          # loop device that maps only one partition cannot answer for it: all
+          # it holds is an ext4 superblock. Attach the whole image with -P so
+          # the kernel partitions it, then ask the partition node.
+          ROOTNUM=$(sfdisk -d "$DISK" 2>/dev/null \
+            | sed -n 's/^\(\/dev\/[^:]*\)[0-9]*:.*type=0FC63DAF.*/\1/p' | sed 's|.*/dev/||' | head -n 1)
+          echo "  root partition node is $ROOTNUM" >&2
+          WHOLE=$(sudo losetup -f --show -P "$DISK" 2>/dev/null || true)
           PARTUUID=
-          [ -n "$LOOP" ] && PARTUUID=$(sudo blkid -p -o value -s PARTUUID "$LOOP" 2>/dev/null || true)
-          echo "  root PARTUUID=$PARTUUID at offset $OFFSET via ${LOOP:-no loop}" >&2
+          if [ -n "$WHOLE" ]; then
+            sleep 2
+            PARTUUID=$(sudo blkid -p -o value -s PARTUUID "${WHOLE}p${ROOTNUM}" 2>/dev/null || true)
+          fi
+          echo "  root PARTUUID=$PARTUUID via ${WHOLE:-no loop}" >&2
           [ -n "$PARTUUID" ] || { echo '  could not read the root PARTUUID' >&2; exit 1; }
+          START=$(sfdisk -d "$DISK" 2>/dev/null \
+            | sed -n 's/.*start=[[:space:]]*\([0-9][0-9]*\).*type=0FC63DAF.*/\1/p' | head -n 1)
+          OFFSET=$(( ${START:-0} * 512 ))
           MNT=$(mktemp -d)
           LOOP=$(sudo losetup -f --show -o "$OFFSET" "$DISK" 2>/dev/null || true)
           if [ -n "$LOOP" ] && sudo mount -o ro,noload "$LOOP" "$MNT" 2>/dev/null; then
