@@ -694,9 +694,26 @@ ROOT_PARTUUID=$(blkid -s PARTUUID -o value "$ROOT")
 if [ -f "$WORK/target/boot/initramfs" ]; then
     KERNEL_LINES="    linux /boot/vmlinuz root=PARTUUID=$ROOT_PARTUUID rw rootwait console=tty0 console=ttyS0,115200n8 nomodeset systemd.show_status=yes systemd.log_level=debug loglevel=7
     initrd /boot/initramfs"
+    # The direct-mount path is what the initramfs replaced, and it is still
+    # the only way in if the archive stops working. Keep it as a second menu
+    # entry rather than a branch inside one entry: a fallback that depends on
+    # the same thing that broke is not a fallback.
+    EXTRA_ENTRIES="menuentry 'OkraLinux, direct root mount' --class gnu-linux --class gnu --class os {
+    search --no-floppy --fs-uuid --set=root $ROOT_UUID
+    linux /boot/vmlinuz root=PARTUUID=$ROOT_PARTUUID rw rootwait init=/sbin/okra-init console=tty0 console=ttyS0,115200n8 nomodeset systemd.show_status=yes
+}"
 else
     KERNEL_LINES="    linux /boot/vmlinuz root=PARTUUID=$ROOT_PARTUUID rw rootwait init=/sbin/okra-init console=tty0 console=ttyS0,115200n8 nomodeset systemd.show_status=yes systemd.log_level=debug loglevel=7"
+    EXTRA_ENTRIES=
 fi
+# A shell with no systemd behind it: the machine is up, the filesystems are
+# mounted by the kernel and this entry, and there is a root prompt to repair
+# from. Arch calls the same thing an emergency shell.
+EXTRA_ENTRIES="$EXTRA_ENTRIES
+menuentry 'OkraLinux, recovery shell' --class gnu-linux --class gnu --class os {
+    search --no-floppy --fs-uuid --set=root $ROOT_UUID
+    linux /boot/vmlinuz root=PARTUUID=$ROOT_PARTUUID rw rootwait init=/bin/bash console=tty0 console=ttyS0,115200n8 nomodeset
+}"
 
 first_existing() {
     local c
@@ -797,6 +814,7 @@ menuentry 'OkraLinux' --class gnu-linux --class gnu --class os {
     search --no-floppy --fs-uuid --set=root $ROOT_UUID
 $KERNEL_LINES
 }
+$EXTRA_ENTRIES
 EOF
 
 progress 98 'Syncing disk'

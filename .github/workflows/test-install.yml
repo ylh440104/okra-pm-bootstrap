@@ -344,6 +344,104 @@ jobs:
             tail -40 "$BOOTLOG" 2>/dev/null || true
             exit 1
           fi
+      - name: Log in to the finished system
+        if: always()
+        env:
+          SECONDS_TO_RUN: 600
+          BOOTLOG: ${{ runner.temp }}/boot3.log
+          DISK: ${{ runner.temp }}/disk.img
+        run: |
+          set -uo pipefail
+          OVMF_CODE=/usr/share/OVMF/OVMF_CODE_4M.fd
+          OVMF_VARS=/usr/share/OVMF/OVMF_VARS_4M.fd
+          [ -f "$OVMF_CODE" ] || OVMF_CODE=/usr/share/OVMF/OVMF_CODE.fd
+          [ -f "$OVMF_VARS" ] || OVMF_VARS=/usr/share/OVMF/OVMF_VARS.fd
+          cp "$OVMF_VARS" "$RUNNER_TEMP/ovmf-vars3.fd"
+          FIFO="$RUNNER_TEMP/fifo3"
+          DRIVER="$RUNNER_TEMP/driver3.log"
+          rm -f "$FIFO"; mkfifo "$FIFO"
+          drive() {
+            await() {
+              waited=0
+              while [ "$waited" -lt "$2" ]; do
+                grep -q "$1" "$BOOTLOG" 2>/dev/null && return 0
+                sleep 4
+                waited=$((waited + 4))
+              done
+              echo "  (never saw: $1)" >&2
+              return 1
+            }
+            send_key() { printf '%b' "$1"; }
+            if await 'login:' 600; then
+              echo "  the login prompt came up" >&2
+              sleep 5
+              send_key 'okra\r'
+            fi
+            if await 'Password:' 120; then
+              echo "  the password prompt came up" >&2
+              sleep 5
+              send_key 'okrapass\r'
+            fi
+            sleep 8
+            send_key 'echo MARK_IN\r'
+            if await 'MARK_IN' 120; then
+              echo "  logged in as okra" >&2
+            fi
+            sleep 3
+            send_key 'findmnt -n -o FSTYPE /\r'
+            if await 'ext4' 120; then
+              echo "  findmnt answered" >&2
+            fi
+            sleep 3
+            send_key 'systemctl is-system-running\r'
+            if await 'running' 180; then
+              echo "  systemd reports a running system" >&2
+            fi
+            sleep 3
+            send_key 'echo okrapass | sudo -S sh -c "mkdir -p /mnt/probe && mount -t tmpfs tmpfs /mnt/probe && echo MOUNT_OK && umount /mnt/probe"\r'
+            if await 'MOUNT_OK' 180; then
+              echo "  sudo granted root and the mount ran" >&2
+            fi
+            sleep 3
+            send_key 'systemctl --no-pager list-units --type=mount\r'
+            sleep 10
+            send_key 'echo ALL_DONE\r'
+            await 'ALL_DONE' 60 || true
+          }
+          drive > "$FIFO" 2> "$DRIVER" &
+          timeout "${SECONDS_TO_RUN}" qemu-system-x86_64 \
+            -m 2048 -smp 2 -accel tcg \
+            -drive "file=$DISK,format=raw,if=virtio" \
+            -drive "if=pflash,format=raw,readonly=on,file=$OVMF_CODE" \
+            -drive "if=pflash,format=raw,file=$RUNNER_TEMP/ovmf-vars3.fd" \
+            -display none -serial stdio \
+            < "$FIFO" > "$BOOTLOG" 2>&1 || true
+          kill "$(jobs -p)" 2>/dev/null || true
+          rm -f "$FIFO"
+          echo "== what the session did"
+          cat "$DRIVER" 2>/dev/null || true
+          echo "== the session on the console"
+          tail -40 "$BOOTLOG" 2>/dev/null | sed 's/\r//' || true
+          fails=0
+          check() {
+            if grep -q "$2" "$BOOTLOG" 2>/dev/null; then
+              echo "  PASS: $1"
+            else
+              echo "  FAIL: $1" >&2
+              fails=$((fails + 1))
+            fi
+          }
+          check 'the finished system boots to a login prompt' 'login:'
+          check 'okra logs in over the serial console' 'MARK_IN'
+          check 'the root filesystem is ext4' 'ext4'
+          check 'systemd reports a running system' 'running'
+          check 'sudo grants root and mount works' 'MOUNT_OK'
+          echo
+          if [ "$fails" -gt 0 ]; then
+            echo "FAIL: $fails check(s) did not pass" >&2
+            exit 1
+          fi
+          echo 'PASS: the finished system logs in and can administer itself'
       - name: Verify the finished system
         if: always()
         env:
@@ -443,6 +541,17 @@ jobs:
               report "tool $t" no missing
             fi
           done
+          entries=$(grep -c '^menuentry ' "$MNT/boot/grub2/grub.cfg" 2>/dev/null || echo 0)
+          if [ "$entries" -ge 3 ]; then
+            report 'boot entries' yes "$entries (normal, direct, recovery)"
+          else
+            report 'boot entries' no "only $entries"
+          fi
+          if grep -q "recovery shell" "$MNT/boot/grub2/grub.cfg" 2>/dev/null; then
+            report 'recovery shell entry' yes 'init=/bin/bash available'
+          else
+            report 'recovery shell entry' no missing
+          fi
           if [ -f "$MNT/boot/initramfs" ]; then
             report 'initramfs on the boot disk' yes present
           else
@@ -490,6 +599,8 @@ jobs:
           name: okra-install-diag
           path: |
             ${{ runner.temp }}/install.log
+            ${{ runner.temp }}/boot3.log
+            ${{ runner.temp }}/driver3.log
             ${{ runner.temp }}/boot.log
             ${{ runner.temp }}/driver.log
             ${{ runner.temp }}/driver2.log
