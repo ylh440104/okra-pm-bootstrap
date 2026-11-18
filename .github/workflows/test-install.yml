@@ -510,21 +510,14 @@ jobs:
             await 'DIAG_END' 60 || true
           }
           drive > "$FIFO" 2> "$DRIVER" &
-          # PARTUUID lives in the partition table, not in the filesystem, so a
-          # loop device that maps only one partition cannot answer for it: all
-          # it holds is an ext4 superblock. Attach the whole image with -P so
-          # the kernel partitions it, then ask the partition node.
-          ROOTNUM=$(sfdisk -d "$DISK" 2>/dev/null \
-            | sed -n 's/^\(\/dev\/[^:]*\)[0-9]*:.*type=0FC63DAF.*/\1/p' | sed 's|.*/dev/||' | head -n 1)
-          echo "  root partition node is $ROOTNUM" >&2
-          WHOLE=$(sudo losetup -f --show -P "$DISK" 2>/dev/null || true)
-          PARTUUID=
-          if [ -n "$WHOLE" ]; then
-            sleep 2
-            PARTUUID=$(sudo blkid -p -o value -s PARTUUID "${WHOLE}p${ROOTNUM}" 2>/dev/null || true)
-          fi
-          echo "  root PARTUUID=$PARTUUID via ${WHOLE:-no loop}" >&2
-          [ -n "$PARTUUID" ] || { echo '  could not read the root PARTUUID' >&2; exit 1; }
+          # The installer lays the disk out the same way every time: ESP,
+          # boot, then the root. Under QEMU the root is vda3, and naming the
+          # device beats every quieter path: a PARTUUID cannot be read from
+          # an image the host is not allowed to partition, and a loop device
+          # that covers one slice holds no partition table to answer from.
+          ROOTDEV=/dev/vda3
+          # The loop is only used to lift the kernel and initramfs out of the
+          # image for -kernel, so it wants the root slice, not the whole disk.
           START=$(sfdisk -d "$DISK" 2>/dev/null \
             | sed -n 's/.*start=[[:space:]]*\([0-9][0-9]*\).*type=0FC63DAF.*/\1/p' | head -n 1)
           OFFSET=$(( ${START:-0} * 512 ))
@@ -542,7 +535,7 @@ jobs:
             -m 2048 -smp 2 -accel tcg \
             -drive "file=$DISK,format=raw,if=virtio" \
             -kernel "$RUNNER_TEMP/vmlinuz-boot" \
-            -append "root=PARTUUID=$PARTUUID rw rootwait init=/bin/bash console=tty0 console=ttyS0,115200n8" \
+            -append "root=/dev/vda3 rw rootwait init=/bin/bash console=tty0 console=ttyS0,115200n8" \
             -display none -serial stdio \
             < "$FIFO" > "$BOOTLOG" 2>&1 || true
           kill "$(jobs -p)" 2>/dev/null || true
