@@ -506,6 +506,9 @@ jobs:
             send_key 'echo DIAG_PAM; ls /etc/pam.d 2>&1; echo DIAG_PAM_END\r'
             await 'DIAG_PAM_END' 90 || true
             sleep 2
+            send_key 'echo DIAG_AG; setsid /sbin/agetty -L ttyS0 115200 vt100 >/tmp/ag.out 2>/tmp/ag.err & sleep 8; echo --- out; cat /tmp/ag.out; echo --- err; cat /tmp/ag.err; echo DIAG_AG_END\r'
+            await 'DIAG_AG_END' 150 || true
+            sleep 3
             send_key 'echo DIAG_END\r'
             await 'DIAG_END' 60 || true
           }
@@ -643,14 +646,10 @@ jobs:
               report "tool $t" no missing
             fi
           done
-          # agetty can be present, run, and still find nothing to open: the
-          # node exists only once the kernel's 8250 driver registers the port.
-          # Assert the node itself, not just the unit that would use it.
-          if [ -c "$MNT/dev/ttyS0" ]; then
-            report 'serial device node' yes 'dev/ttyS0 is a character device'
-          else
-            report 'serial device node' no 'dev/ttyS0 missing'
-          fi
+          # /dev on the disk is an empty directory on purpose: devtmpfs is
+          # mounted over it at boot, so a node that exists at runtime is not
+          # a file in the image. The console is proved where it can be seen,
+          # by logging in, not by looking for a node never meant to be there.
           for f in sbin/agetty bin/login usr/bin/passwd etc/pam.d/login; do
             if [ -e "$MNT/$f" ]; then
               report "$f" yes present
