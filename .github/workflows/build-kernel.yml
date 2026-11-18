@@ -115,9 +115,16 @@ jobs:
             -e MEMCG -e MEMCG_SWAP -e MEMCG_KMEM \
             -e CGROUP_SCHED -e CGROUP_FREEZER -e CGROUP_DEVICE -e CGROUP_CPUACCT \
             -e USER_NS -e PID_NS -e NET_NS -e UTS_NS -e IPC_NS \
+            -e SERIAL_8250 -e SERIAL_8250_CONSOLE -e SERIAL_8250_PNP \
+            -e SERIAL_CORE -e SERIAL_CORE_CONSOLE -e TTY -e VT \
             -d NF_CONNTRACK_IRC
           echo "== after the change"
           grep -E 'CONFIG_(SQUASHFS|OVERLAY_FS|BPF_SYSCALL|CGROUP_BPF)|NF_CONNTRACK_IRC' "$RUNNER_TEMP/kernel/.config" || true
+          # The serial line every test talks through. The kernel logs to it from
+          # the command line alone, but no /dev/ttyS0 exists until 8250 registers
+          # the port; agetty then opens it, fails, and exits, while systemd still
+          # calls the unit started because it does not track the child.
+          grep -E 'CONFIG_(SERIAL_8250|SERIAL_CORE)=' "$RUNNER_TEMP/kernel/.config" || true
           # systemd reads the options the kernel used to mount the root and
           # rewrites them in its own form. memory_recursiveprot and
           # memory_hugetlb_accounting are memory cgroup options: without MEMCG
