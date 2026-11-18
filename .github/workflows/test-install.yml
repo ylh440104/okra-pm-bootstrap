@@ -509,6 +509,9 @@ jobs:
             send_key 'echo DIAG_AG; setsid /sbin/agetty -L ttyS0 115200 vt100 >/tmp/ag.out 2>/tmp/ag.err & sleep 8; echo --- out; cat /tmp/ag.out; echo --- err; cat /tmp/ag.err; echo DIAG_AG_END\r'
             await 'DIAG_AG_END' 150 || true
             sleep 3
+            send_key 'echo DIAG_TERM; ls /usr/share/terminfo 2>&1 | head -5; echo --- vt100; ls /usr/share/terminfo/v 2>&1 | head -5; echo --- login; /bin/login -h ttyS0 -f root >/tmp/l.out 2>/tmp/l.err & sleep 5; cat /tmp/l.out; echo --- err; cat /tmp/l.err; echo DIAG_TERM_END\r'
+            await 'DIAG_TERM_END' 150 || true
+            sleep 3
             send_key 'echo DIAG_END\r'
             await 'DIAG_END' 60 || true
           }
