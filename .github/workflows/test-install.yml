@@ -372,10 +372,26 @@ jobs:
               return 1
             }
             send_key() { printf '%b' "$1"; }
-            if await 'login:' 600; then
+            # agetty writes the prompt straight to the serial line rather than
+            # through the kernel log, and a line nobody has touched since boot
+            # can sit without flushing. Wait briefly, then poke it with a
+            # newline and say what the line really shows, so a run that fails
+            # here explains itself instead of printing one word.
+            if await 'login:' 60; then
               echo "  the login prompt came up" >&2
               sleep 5
               send_key 'okra\r'
+            else
+              send_key '\r'
+              sleep 5
+              if await 'login:' 120; then
+                echo "  the login prompt came up after a newline" >&2
+                sleep 3
+                send_key 'okra\r'
+              else
+                echo "  the serial line never offered a login; it ends with:" >&2
+                tail -20 "$BOOTLOG" | sed 's/\r//' | cut -c1-120 >&2 || true
+              fi
             fi
             if await 'Password:' 120; then
               echo "  the password prompt came up" >&2
@@ -539,6 +555,13 @@ jobs:
               report "tool $t" yes present
             else
               report "tool $t" no missing
+            fi
+          done
+          for f in sbin/agetty bin/login usr/bin/passwd etc/pam.d/login; do
+            if [ -e "$MNT/$f" ]; then
+              report "$f" yes present
+            else
+              report "$f" no missing
             fi
           done
           entries=$(grep -c '^menuentry ' "$MNT/boot/grub2/grub.cfg" 2>/dev/null || echo 0)
