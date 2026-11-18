@@ -153,6 +153,15 @@ ExecStart=-/sbin/agetty -L 115200 ttyS0 linux
 GETTYOVERRIDE
     fi
     systemctl daemon-reload 2>/dev/null || true
+    # Write the command line systemd will actually run into the kernel log.
+    # The console either shows a prompt or it does not, and there is no way to
+    # ask a machine without a login what its getty was told; the next boot
+    # reads this from the serial line instead.
+    _getty_line=$(systemctl show serial-getty@ttyS0.service -p ExecStart 2>/dev/null)
+    printf 'okrainstall: serial getty is %s\n' "${_getty_line:-unknown}" >/dev/kmsg 2>/dev/null || true
+    printf 'okrainstall: getty override present: %s\n' \
+        "$( [ -f /etc/systemd/system/serial-getty@ttyS0.service.d/override.conf ] && echo yes || echo no )" \
+        >/dev/kmsg 2>/dev/null || true
 
     rm -f /usr/bin/kanina-tui /usr/bin/kanina-live /usr/bin/kanina-installer \
           /usr/bin/kanina-wayland /usr/bin/kanina-wayland-session \
