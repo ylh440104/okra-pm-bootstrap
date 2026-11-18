@@ -588,6 +588,19 @@ if [ -e "$WORK/target/usr/lib/libmount.so.1" ]; then
 else
     echo 'libmount is still missing; systemd will freeze at mount_setup' >&2
 fi
+
+# Privilege on the target is not only ownership. chown clears the setuid
+# bit, and the image is built with chown -R so every privileged binary
+# reaches the disk as plain 0755: sudo then refuses to run at all with
+# "must be owned by uid 0 and have the setuid bit set". Put the bit back
+# on the binaries that cannot work without it.
+for priv in usr/bin/sudo usr/bin/passwd usr/bin/chsh usr/bin/chfn \
+            usr/bin/newgrp usr/bin/gpasswd bin/su bin/mount bin/umount; do
+    if [ -f "$WORK/target/$priv" ]; then
+        chmod 4755 "$WORK/target/$priv"
+    fi
+done
+step "restored the setuid bit on $(($(find "$WORK/target/usr/bin" "$WORK/target/bin" -maxdepth 1 -perm -4000 2>/dev/null | wc -l))) binaries"
 # The boot now gets past mount_setup, but it stops without failing anything:
 # every unit that started reports success, and the boot simply never reaches
 # multi-user. That is the shape of a service waiting on something, and the

@@ -404,7 +404,7 @@ jobs:
               echo "  logged in as okra" >&2
             fi
             sleep 3
-            send_key 'findmnt -n -o FSTYPE /\r'
+            send_key 'sed -n 1p /proc/mounts; systemctl list-units --type=mount --no-pager | grep -- -.mount\r'
             if await 'ext4' 120; then
               echo "  findmnt answered" >&2
             fi
@@ -419,6 +419,8 @@ jobs:
               echo "  sudo granted root and the mount ran" >&2
             fi
             sleep 3
+            send_key 'systemctl --failed --no-pager | head -12\r'
+            sleep 6
             send_key 'systemctl --no-pager list-units --type=mount\r'
             sleep 10
             send_key 'echo ALL_DONE\r'
@@ -449,6 +451,7 @@ jobs:
           }
           check 'the finished system boots to a login prompt' 'login:'
           check 'okra logs in over the serial console' 'MARK_IN'
+          check 'the root filesystem is mounted' '-.mount'
           check 'the root filesystem is ext4' 'ext4'
           check 'systemd reports a running system' 'running'
           check 'sudo grants root and mount works' 'MOUNT_OK'
@@ -653,6 +656,13 @@ jobs:
           # mounted over it at boot, so a node that exists at runtime is not
           # a file in the image. The console is proved where it can be seen,
           # by logging in, not by looking for a node never meant to be there.
+          # chown during the image build clears it, and sudo refuses to run
+          # without it, so the bit is part of the finished system.
+          if [ -u "$MNT/usr/bin/sudo" ]; then
+            report 'sudo setuid' yes 'the bit survived the install'
+          else
+            report 'sudo setuid' no 'plain 0755, sudo cannot work'
+          fi
           for f in sbin/agetty bin/login usr/bin/passwd etc/pam.d/login; do
             if [ -e "$MNT/$f" ]; then
               report "$f" yes present
