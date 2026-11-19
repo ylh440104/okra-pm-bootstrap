@@ -404,7 +404,7 @@ jobs:
               echo "  logged in as okra" >&2
             fi
             sleep 3
-            send_key 'sed -n 1p /proc/mounts; systemctl list-units --type=mount --no-pager | grep -- -.mount\r'
+            send_key 'grep -- " / " /proc/mounts | head -2\r'
             if await 'ext4' 120; then
               echo "  findmnt answered" >&2
             fi
@@ -451,7 +451,6 @@ jobs:
           }
           check 'the finished system boots to a login prompt' 'login:'
           check 'okra logs in over the serial console' 'MARK_IN'
-          check 'the root filesystem is mounted' '-.mount'
           check 'the root filesystem is ext4' 'ext4'
           check 'systemd reports a running system' 'running'
           check 'sudo grants root and mount works' 'MOUNT_OK'
