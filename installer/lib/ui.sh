@@ -28,8 +28,13 @@ ui_claim_console() {
     # front of, so its presence says nothing.
     local cmdline
     cmdline=$(cat /proc/cmdline 2>/dev/null || true)
+    # A machine with a screen and no serial reader gets nothing at all if the
+    # installer draws to ttyS0: the frames go into a port nobody opened and
+    # the keyboard reaches a terminal that was never written to. The medium
+    # says which it is with okra.console=screen, because the console= order
+    # alone cannot tell a serial operator from a person in front of a monitor.
     case " $cmdline " in
-        *" console=ttyS"*" console=tty0 "*|*" console=tty0 "*" console=ttyS"*) ;;
+        *" okra.console=screen "*) target=tty1 ;;
         *" console=ttyS"*) target=ttyS0 ;;
     esac
     if [ ! -c "/dev/$target" ]; then

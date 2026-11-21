@@ -704,8 +704,22 @@ ROOT_PARTUUID=$(blkid -s PARTUUID -o value "$ROOT")
 # The grub entry is written knowing whether the initramfs was copied, not
 # tested at boot time: the standalone GRUB image carries no test.mod, so an
 # `if [ -f ... ]` in grub.cfg fails closed and silently takes the fallback.
+# Which console the operator is looking at decides the order of console= on
+# the installed system: /dev/console is the last one named. A machine with a
+# screen must keep tty0 last or stage 2 and 3 draw into a serial port nobody
+# opened, and an operator on a serial line must keep ttyS last for the same
+# reason in reverse.
+CONSOLE_ARGS="console=tty0 console=ttyS0,115200n8"
+CONSOLE_TAG=
+case " $(cat /proc/cmdline 2>/dev/null) " in
+    *" okra.console=screen "*)
+        CONSOLE_ARGS="console=ttyS0,115200n8 console=tty0"
+        CONSOLE_TAG=okra.console=screen
+        ;;
+esac
+step "installed console order: $CONSOLE_ARGS"
 if [ -f "$WORK/target/boot/initramfs" ]; then
-    KERNEL_LINES="    linux /boot/vmlinuz root=PARTUUID=$ROOT_PARTUUID rw rootwait console=tty0 console=ttyS0,115200n8 nomodeset systemd.show_status=yes systemd.log_level=debug loglevel=7
+    KERNEL_LINES="    linux /boot/vmlinuz root=PARTUUID=$ROOT_PARTUUID rw rootwait $CONSOLE_ARGS$CONSOLE_TAG nomodeset systemd.show_status=yes systemd.log_level=debug loglevel=7
     initrd /boot/initramfs"
     # The direct-mount path is what the initramfs replaced, and it is still
     # the only way in if the archive stops working. Keep it as a second menu
@@ -713,10 +727,10 @@ if [ -f "$WORK/target/boot/initramfs" ]; then
     # the same thing that broke is not a fallback.
     EXTRA_ENTRIES="menuentry 'OkraLinux, direct root mount' --class gnu-linux --class gnu --class os {
     search --no-floppy --fs-uuid --set=root $ROOT_UUID
-    linux /boot/vmlinuz root=PARTUUID=$ROOT_PARTUUID rw rootwait init=/sbin/okra-init console=tty0 console=ttyS0,115200n8 nomodeset systemd.show_status=yes
+    linux /boot/vmlinuz root=PARTUUID=$ROOT_PARTUUID rw rootwait init=/sbin/okra-init $CONSOLE_ARGS$CONSOLE_TAG nomodeset systemd.show_status=yes
 }"
 else
-    KERNEL_LINES="    linux /boot/vmlinuz root=PARTUUID=$ROOT_PARTUUID rw rootwait init=/sbin/okra-init console=tty0 console=ttyS0,115200n8 nomodeset systemd.show_status=yes systemd.log_level=debug loglevel=7"
+    KERNEL_LINES="    linux /boot/vmlinuz root=PARTUUID=$ROOT_PARTUUID rw rootwait init=/sbin/okra-init $CONSOLE_ARGS$CONSOLE_TAG nomodeset systemd.show_status=yes systemd.log_level=debug loglevel=7"
     EXTRA_ENTRIES=
 fi
 # A shell with no systemd behind it: the machine is up, the filesystems are
@@ -725,7 +739,7 @@ fi
 EXTRA_ENTRIES="$EXTRA_ENTRIES
 menuentry 'OkraLinux, recovery shell' --class gnu-linux --class gnu --class os {
     search --no-floppy --fs-uuid --set=root $ROOT_UUID
-    linux /boot/vmlinuz root=PARTUUID=$ROOT_PARTUUID rw rootwait init=/bin/bash console=tty0 console=ttyS0,115200n8 nomodeset
+    linux /boot/vmlinuz root=PARTUUID=$ROOT_PARTUUID rw rootwait init=/bin/bash $CONSOLE_ARGS$CONSOLE_TAG nomodeset
 }"
 
 first_existing() {
